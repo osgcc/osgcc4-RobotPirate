@@ -26,21 +26,13 @@ Enemies drop items randomly
 	- Weapon upgrades
 	- Shield?
 
-Enemy types:
-	- Derp. Moves slightly slower than the level itself, shoots ahead every once in a while, eventually moves off near horizon. Little health.
-	- Quick. Moves forward/back and around a little way ahead of the player. Shoots at player more often than derp, but not too quick. Eventually moves off near horizon. Medium health.
-	- Heavy. Not very mobile, but hovers ahead of player. Fires a lot (maybe spread shot). Must be killed. High health.
-	- Boss. Not too mobile, but must be hit in weak spots. Fires a lot. Must be killed. Very high health.
-
-Weapon types:
-	- Railgun. Boss killer. Very slow firing rate, shoots straight ahead, only lasts a frame, does a lot of damage.
-
 SCORING:
 	- Mine: 10 pts
 	- Derp: 30 pts
 	- Quick: 60 pts
 	- Heavy: 100 pts
 	- Boss: 1000 pts
+	- Collect item: 50 pts
 */
 
 function main()
@@ -108,14 +100,14 @@ class Mine
 {
 	ang
 	z
-	colliding
 	prev
+	health
 
 	function initialize(ang: float, z: float)
 	{
 		:ang = ang
 		:z = z
-		:colliding = false
+		:health = 2
 	}
 }
 
@@ -137,6 +129,56 @@ class Bullet
 	}
 }
 
+@FreeList
+class Enemy
+{
+	ang
+	z
+	health
+	weaponDelayer
+	desc
+	dAng
+	delay
+	dZ
+
+	function initialize(ang: float, z: float, desc: table)
+	{
+		:ang = ang
+		:z = z
+		:desc = desc
+		:weaponDelayer = desc.fireRate
+		:health = desc.health
+		:dAng = 0
+		:delay = 0
+		:dZ = 0
+	}
+	
+	function update()
+	{
+		:desc.update(with this)
+	}
+}
+
+@FreeList
+class Item
+{
+	ang
+	z
+	desc
+	
+	function initialize(ang: float, z: float, desc: table)
+	{
+		:ang = ang
+		:z = z
+		:desc = desc
+	}
+	
+	function collect()
+	{
+		:desc.collect(with this)
+	}
+}
+
 // ===================================================================================
 // State
 // ===================================================================================
@@ -144,6 +186,7 @@ class Bullet
 local projMat2D = Vector(gl.GLfloat, 16)
 local projMat3D = Vector(gl.GLfloat, 16)
 local fps = 0
+local drawDebugText = false
 
 local quitting = false
 local keys = array.new(512, false)
@@ -152,6 +195,7 @@ local keysHit = array.new(512, false)
 local playerMoveSpeed = 12
 local playerMoveMult = 0.15
 local playerWeaponChangeDelay = 20
+local playerMaxHealth = 30
 local playerModel
 local playerAng
 local dPlayerAng
@@ -159,6 +203,7 @@ local playerHealth
 local playerWeaponLevel
 local playerWeapon
 local playerScore
+local playerLives
 local playerFiringRailgun
 
 local playerAngLag = array.new(9, 0)
@@ -171,20 +216,47 @@ local levelSegmentLen = 8
 local levelSpeed = 1.1
 local levelModel
 local levelOffs
-local levelZ
+global levelZ
+local levelMode
+local nextLevelChange
+local levelChangeLength = 600
+local normalMineFreq = 75
+local normalEnemyFreq = 100
+local minefieldMineFreq = 7
+local MODE_NORMAL = 0
+local MODE_MINEFIELD = 1
+local MODE_DOGFIGHT = 2
+local MODE_BOSS = 3
 
 local mineDamageAmount = 5
 local mines = Mine() // dummy sentry node
 local mineModel
 local mineAng
 
-local playerBulletSpeed = 2
+local bulletSpeed = 2
 local playerBulletDelay = 14
 local playerBullets = Bullet() // dummy sentry node
 local playerBulletDelayer
 local bulletModel
 
-local playerWeaponDescs =
+local enemyBullets = Bullet() // dummy sentry node
+
+local enemies = Enemy() // dummy sentry node
+
+local items = Item() // dummy sentry node
+local itemFlashCounter = 0
+
+namespace Scores
+{
+	MINE = 15
+	DERP = 30
+	QUICK = 60
+	HEAVY = 100
+	BOSS = 1000
+	ITEM = 50
+}
+
+global weaponDescs =
 [
 	{
 		level = 0
@@ -214,8 +286,8 @@ local playerWeaponDescs =
 	{
 		level = 2
 		name = "shooter3"
-		fireRate = 10
-		damage = 3
+		fireRate = 18
+		damage = 2
 
 		function fire()
 		{
@@ -229,11 +301,172 @@ local playerWeaponDescs =
 		level = 3
 		name = "railgun"
 		fireRate = 60
-		damage = 50
+		damage = 13
 
 		function fire()
 		{
 			playerFiringRailgun = 4
+		}
+	}
+]
+
+// Enemy types:
+// 	- Derp. Moves slightly slower than the level itself, shoots ahead every once in a while, eventually moves off near horizon. Little health.
+// 	- Quick. Moves forward/back and around a little way ahead of the player. Shoots at player more often than derp, but not too quick. Eventually moves off near horizon. Medium health.
+// 	- Heavy. Not very mobile, but hovers ahead of player. Fires a lot (maybe spread shot). Must be killed. High health.
+// 	- Boss. Not too mobile, but must be hit in weak spots. Fires a lot. Must be killed. Very high health.
+
+local enemyDescs =
+[
+	{
+		name = "derp"
+		weapon = 0
+		fireRate = 120
+		health = 3
+		model = 0
+		score = Scores.DERP
+
+		function update()
+		{
+			:z += 0.15 * levelSpeed
+
+			:dAng = math.rand(3) - 1
+			:ang = wrapAngle(:ang + :dAng)
+			
+			:weaponDelayer--
+			
+			if(:weaponDelayer <= 0)
+			{
+				:weaponDelayer = :desc.fireRate
+				insertIntoList(Bullet.alloc(:ang, :z, 0.0, weaponDescs[:desc.weapon].damage), enemyBullets)
+			}
+		}
+	}
+	
+	{
+		name = "quick"
+		weapon = 0
+		fireRate = 60
+		health = 4
+		model = 0
+		score = Scores.QUICK
+
+		function update()
+		{
+			if(:z < -60)
+			{
+				:dZ = levelSpeed
+				:dAng = 0
+			}
+			else
+			{
+				:delay--
+
+				if(:delay <= 0)
+				{
+					:delay = 20
+
+					if(:dZ == levelSpeed)
+					{
+						:dZ = 0.2 * levelSpeed
+						:dAng = 1
+					}
+					else
+					{
+						:dZ = -:dZ
+						:dAng = math.rand(3) - 1
+					}
+				}
+			}
+
+			:z += :dZ
+			:ang = wrapAngle(:ang + :dAng)
+
+			:weaponDelayer--
+			
+			if(:weaponDelayer <= 0)
+			{
+				:weaponDelayer = :desc.fireRate
+				insertIntoList(Bullet.alloc(:ang, :z, 0.0, weaponDescs[:desc.weapon].damage), enemyBullets)
+			}
+		}
+	}
+	
+	{
+		name = "heavy"
+		weapon = 2
+		fireRate = 60
+		health = 10
+		model = 0
+		score = Scores.HEAVY
+		
+		function update()
+		{
+			if(:z < -70)
+			{
+				:dZ = levelSpeed
+				:dAng = 0
+			}
+			else
+			{
+				:delay--
+				
+				if(:delay <= 0)
+				{
+					:delay = 20
+					
+					if(:dZ == levelSpeed)
+						:dZ = 0
+
+					:dAng = math.frand(0.5) - 0.25
+				}
+			}
+			
+			:z += :dZ
+			:ang = wrapAngle(:ang + :dAng)
+			
+			:weaponDelayer--
+			
+			if(:weaponDelayer <= 0)
+			{
+				:weaponDelayer = :desc.fireRate
+// 				insertIntoList(Bullet.alloc(:ang, :z, 0.0, weaponDescs[:desc.weapon].damage), enemyBullets)
+				insertIntoList(Bullet.alloc(wrapAngle(:ang + 5), :z, 10.0, weaponDescs[:desc.weapon].damage), enemyBullets)
+				insertIntoList(Bullet.alloc(wrapAngle(:ang - 5), :z, -10.0, weaponDescs[:desc.weapon].damage), enemyBullets)
+			}
+		}
+	}
+]
+
+local itemDescs =
+[
+	{
+		name = "health"
+		model = 0
+
+		function collect()
+		{
+			healPlayer(playerMaxHealth / 5)
+		}
+	}
+	
+	{
+		name = "weapon"
+		model = 0
+		
+		function collect()
+		{
+			playerWeaponLevel = clamp(playerWeaponLevel + 1, 0, 3)
+		}
+	}
+	
+	{
+		name = "extralife"
+		model = 0
+		
+		function collect()
+		{
+			playerLives++
 		}
 	}
 ]
@@ -246,8 +479,13 @@ function resetState()
 {
 	playerAng = 0.0
 	dPlayerAng = 0
-	playerHealth = 100
+	playerHealth = playerMaxHealth
 	playerFiringRailgun = 0
+	playerBulletDelayer = 0
+	playerWeaponLevel = 0
+	playerWeapon = weaponDescs[0]
+	playerScore = 0
+	playerLives = 3
 	playerAngLag.fill(0)
 	lagNewPtr = #playerAngLag - 1
 	lagOldPtr = 0
@@ -255,25 +493,14 @@ function resetState()
 	mineAng = 0.0
 	levelOffs = 0.0
 	levelZ = 0.0
-
-	while(mines.next)
-	{
-		local m = mines.next
-		removeFromList(m)
-		m.free()
-	}
-
-	while(playerBullets.next)
-	{
-		local b = playerBullets.next
-		removeFromList(b)
-		b.free()
-	}
-
-	playerBulletDelayer = 0
-	playerWeaponLevel = 3 // TODO: default to 0
-	playerWeapon = playerWeaponDescs[0]
-	playerScore = 0
+	levelMode = MODE_NORMAL
+	nextLevelChange = 0
+	
+	emptyList(mines)
+	emptyList(playerBullets)
+	emptyList(enemyBullets)
+	emptyList(enemyBullets)
+	emptyList(items)
 }
 
 // Game setup
@@ -297,6 +524,8 @@ function loop()
 		updatePlayer()
 		updateCamera()
 		updateLevel()
+		updateEnemies()
+		updateItems()
 		drawGraphics()
 
 		frames++
@@ -376,9 +605,18 @@ function setupGraphics()
 function setupResources()
 {
 	levelModel = makeTunnelPiece(20)
+
 	playerModel = loadModel("models/ship.obj")
 	mineModel = loadModel("models/obstacle.obj")
 	bulletModel = loadModel("models/bullet.obj")
+
+	enemyDescs[0].model = loadModel("models/derp.obj")
+	enemyDescs[1].model = loadModel("models/quick.obj")
+	enemyDescs[2].model = loadModel("models/heavy.obj")
+
+	itemDescs[0].model = loadModel("models/health.obj")
+	itemDescs[1].model = loadModel("models/weapon.obj")
+	itemDescs[2].model = loadModel("models/extralife.obj")
 }
 
 // Set up event handlers
@@ -408,7 +646,7 @@ function doInput()
 		else if(dPlayerAng < 0)
 			dPlayerAng += 1
 	}
-	
+
 	local weaponChange = playerWeapon.level
 
 	if(keysHit[key.z])
@@ -428,11 +666,13 @@ function doInput()
 		playerBulletDelayer = playerWeapon.fireRate
 		playerWeapon.fire()
 	}
+	
+	drawDebugText = keys[key.backquote]
 }
 
 function changeWeapon(idx: int)
 {
-	playerWeapon = playerWeaponDescs[idx]
+	playerWeapon = weaponDescs[idx]
 	playerBulletDelayer = math.max(playerWeaponChangeDelay, playerWeapon.fireRate)
 }
 
@@ -449,7 +689,7 @@ function updatePlayer()
 	{
 		local b = bul.next
 		
-		local dAng, dZ = sin(b.dir) * playerBulletSpeed, cos(b.dir) * playerBulletSpeed
+		local dAng, dZ = sin(b.dir) * bulletSpeed, cos(b.dir) * bulletSpeed
 
 		b.ang = wrapAngle(b.ang + dAng)
 		b.z -= dZ
@@ -460,14 +700,39 @@ function updatePlayer()
 			b.free()
 			continue
 		}
+		
+		local collided = false
+
+		// Check for collision with enemies
+		for(local enemy = enemies.next; enemy !is null; enemy = enemy.next)
+		{
+			if(abs(b.z - enemy.z) < 2 && angDiff(b.ang, enemy.ang) < 7)
+			{
+				damageEnemy(enemy, b.damage)
+				removeFromList(b)
+				b.free()
+				collided = true
+				break
+			}
+		}
+		
+		if(collided)
+			continue
 
 		// Check for collision with mines
 		for(local mine = mines.next; mine !is null; mine = mine.next)
 		{
 			if(abs(b.z - mine.z) < 2 && angDiff(b.ang, mine.ang) < 7)
 			{
-				removeFromList(mine)
-				mine.free()
+				mine.health -= b.damage
+				
+				if(mine.health <= 0)
+				{
+					playerScore += Scores.MINE
+					removeFromList(mine)
+					mine.free()
+				}
+
 				removeFromList(b)
 				b.free()
 				break
@@ -484,12 +749,35 @@ function updatePlayer()
 
 			if(m.z < -30 && angDiff(playerAng, m.ang) < 7)
 			{
+				playerScore += Scores.MINE
 				removeFromList(m)
 				m.free()
 			}
 		}
+		
+		// Check for collision with enemies
+		for(local enemy = enemies; enemy && enemy.next !is null; enemy = enemy.next)
+		{
+			local e = enemy.next
+			
+			if(e.z < -30 && angDiff(playerAng, e.ang) < 7)
+				damageEnemy(e, weaponDescs[3].damage)
+		}
 
 		playerFiringRailgun--
+	}
+}
+
+function damageEnemy(enemy, amt)
+{
+	enemy.health -= amt
+
+	if(enemy.health <= 0)
+	{
+		playerScore += enemy.desc.score
+		maybeSpawnItem(enemy.ang, enemy.z)
+		removeFromList(enemy)
+		enemy.free()
 	}
 }
 
@@ -510,9 +798,61 @@ function updateCamera()
 function updateLevel()
 {
 	levelZ += levelSpeed
-	
-	if(levelZ % 20 < 1)
-		insertIntoList(Mine.alloc(math.frand(360.0), -240.0), mines)
+
+	switch(levelMode)
+	{
+		case MODE_NORMAL:
+			if(levelZ % normalMineFreq < 1)
+				insertIntoList(Mine.alloc(math.frand(360.0), -240.0), mines)
+
+			if(levelZ % normalEnemyFreq < 1)
+			{
+				local r = math.frand(1.0)
+				local type
+
+				if(r < 0.7)
+					type = 0
+				else if(r < 0.95)
+					type = 1
+				else
+					type = 2
+
+				insertIntoList(Enemy.alloc(math.frand(360.0), -120.0, enemyDescs[type]), enemies)
+			}
+
+			if(levelZ >= nextLevelChange)
+			{
+				levelMode = math.rand(3)
+				nextLevelChange = levelZ + levelChangeLength
+			}
+			break
+
+		case MODE_MINEFIELD:
+			if(levelZ % minefieldMineFreq < 1)
+				insertIntoList(Mine.alloc(math.frand(360.0), -240.0), mines)
+			
+			if(levelZ >= nextLevelChange)
+			{
+				levelMode = math.rand(2)
+
+				if(levelMode > 0)
+					levelMode++
+					
+				nextLevelChange = levelZ + levelChangeLength
+			}
+			break
+
+		case MODE_DOGFIGHT:
+			// TODO: this
+			levelMode = MODE_NORMAL
+			nextLevelChange = levelZ
+			break
+
+		case MODE_BOSS:
+			// TODO: this
+			assert(false)
+			break
+	}
 
 	levelOffs += levelSpeed
 
@@ -545,6 +885,87 @@ function updateLevel()
 	}
 }
 
+function updateEnemies()
+{
+	for(local en = enemies; en && en.next; en = en.next)
+	{
+		local e = en.next
+		
+		e.update()
+		
+		if(e.z > 0)
+		{
+			removeFromList(e)
+			e.free()
+		}
+	}
+	
+	for(local bul = enemyBullets; bul && bul.next; bul = bul.next)
+	{
+		local b = bul.next
+		local dAng, dZ = sin(b.dir) * bulletSpeed * 0.6, cos(b.dir) * bulletSpeed * 0.6
+
+		b.ang = wrapAngle(b.ang + dAng)
+		b.z += dZ
+
+		if(b.z > 0)
+		{
+			removeFromList(b)
+			b.free()
+			continue
+		}
+
+		// Check for collision with player
+		if(abs(b.z + 30) < 2 && angDiff(b.ang, playerAng) < 10)
+		{
+			damagePlayer(b.damage)
+			removeFromList(b)
+			b.free()
+			continue
+		}
+
+		// Check for collision with mines
+		for(local mine = mines.next; mine !is null; mine = mine.next)
+		{
+			if(abs(b.z - mine.z) < 2 && angDiff(b.ang, mine.ang) < 7)
+			{
+				removeFromList(mine)
+				mine.free()
+				removeFromList(b)
+				b.free()
+				break
+			}
+		}
+	}
+}
+
+function updateItems()
+{
+	itemFlashCounter = (itemFlashCounter + 1) & 0b1111
+
+	for(local item = items; item && item.next; item = item.next)
+	{
+		local i = item.next
+
+		i.z += 0.4 * levelSpeed
+
+		if(i.z > 0)
+		{
+			removeFromList(i)
+			i.free()
+			continue
+		}
+
+		if(abs(i.z + 30) < 2 && angDiff(i.ang, playerAng) < 15)
+		{
+			playerScore += Scores.ITEM
+			i.collect()
+			removeFromList(i)
+			i.free()
+		}
+	}
+}
+
 // Graphics
 function drawGraphics()
 {
@@ -568,6 +989,9 @@ function draw3D()
 	drawMines()
 	drawPlayer()
 	drawPlayerBullets()
+	drawEnemies()
+	drawEnemyBullets()
+	drawItems()
 }
 
 function drawLevel()
@@ -588,7 +1012,7 @@ function drawLevel()
 function drawMines()
 {
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
-	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.5, 0, 0, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.8, 0, 0, 1)
 
 	for(local mine = mines.next; mine !is null; mine = mine.next)
 	{
@@ -647,6 +1071,60 @@ function drawPlayer()
 	gl.glPopMatrix()
 }
 
+function drawEnemies()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.8, 0.8, 0.8, 1)
+
+	for(local e = enemies.next; e !is null; e = e.next)
+	{
+		gl.glPushMatrix()
+			gl.glRotatef(e.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, e.z)
+			gl.glRotatef(180, 0, 1, 0)
+			gl.glCallList(e.desc.model)
+		gl.glPopMatrix()
+	}
+}
+
+function drawEnemyBullets()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 1, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 0, 1, 1)
+
+	for(local bullet = enemyBullets.next; bullet !is null; bullet = bullet.next)
+	{
+		gl.glPushMatrix()
+			gl.glRotatef(bullet.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, bullet.z)
+			gl.glCallList(bulletModel)
+		gl.glPopMatrix()
+	}
+}
+
+function drawItems()
+{
+	if(itemFlashCounter >= 8)
+	{
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 1, 1, 1)
+	}
+	else
+	{
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 0, 0, 1)
+	}
+
+	for(local item = items.next; item !is null; item = item.next)
+	{
+		gl.glPushMatrix()
+			gl.glRotatef(item.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, item.z)
+			gl.glCallList(item.desc.model)
+		gl.glPopMatrix()
+	}
+}
+
 function draw2D()
 {
 	gl.glMatrixMode(gl.GL_PROJECTION)
@@ -655,8 +1133,16 @@ function draw2D()
 	gl.glDisable(gl.GL_LIGHTING)
 	gl.glLoadIdentity()
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-	text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
-	text.drawText(0, 45, "ANG:{}", playerAng)
+
+	if(drawDebugText)
+	{
+		text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
+		text.drawText(0, 45, "MODE:{}", levelMode)
+		text.drawText(0, 70, "{}:{}", levelZ, nextLevelChange)
+	}
+
+	text.drawText(10, config.winHeight - 10, "LIVES:{}", playerLives)
+	text.drawRightText(config.winWidth - 10, config.winHeight - 10, "{}", playerScore)
 
 	drawHealthBar()
 }
@@ -673,7 +1159,7 @@ function drawHealthBar()
 			gl.glVertex2f(-80, 10)
 		gl.glEnd()
 
-		local temp = playerHealth / 100.0
+		local temp = playerHealth / toFloat(playerMaxHealth)
 		gl.glColor3f(1 - temp, temp, 0)
 		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
 
@@ -693,10 +1179,58 @@ function drawHealthBar()
 
 function damagePlayer(amt: int, explosive: bool = false)
 {
-	playerHealth = clamp(playerHealth - amt, 0, 100)
-	local temp = playerHealth / 10.0
+	playerHealth = clamp(playerHealth - amt, 0, playerMaxHealth)
+	local temp = playerHealth / (playerMaxHealth / 10.0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10 - temp, temp, 0, 1))
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(10 - temp, temp, 0, 1))
+}
+
+function healPlayer(amt: int)
+{
+	playerHealth = clamp(playerHealth + amt, 0, playerMaxHealth)
+	local temp = playerHealth / (playerMaxHealth / 10.0)
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10 - temp, temp, 0, 1))
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(10 - temp, temp, 0, 1))
+}
+
+function maybeSpawnItem(ang: float, z: float)
+{
+	local r = math.frand(1.0)
+
+	if(r < 0.75)
+		return
+
+	r = math.frand(1.0)
+	local type
+
+	if(playerHealth <= playerMaxHealth / 2)
+	{
+		// health 50%
+		// weapon upgrades 49%
+		// extra life 1%
+
+		if(r < 0.5)
+			type = 0
+		else if(r < 0.99)
+			type = 1
+		else
+			type = 2
+	}
+	else
+	{
+		// health 20%
+		// weapon upgrades 78%
+		// extra life 2%
+
+		if(r < 0.2)
+			type = 0
+		else if(r < 0.98)
+			type = 1
+		else
+			type = 2
+	}
+
+	insertIntoList(Item.alloc(ang, z, itemDescs[type]), items);
 }
 
 // ===================================================================================
@@ -833,6 +1367,27 @@ function wrapAngle(v)
 	return v
 }
 
+/* // Smoothly moves an angle from src to dest.
+function curveAngle(src, dest, speed)
+{
+	speed = toFloat(speed)
+
+	if(dest > src)
+	{
+		if((dest - src) > 180)
+			return (src - ((360 - (dest - src)) / speed));
+		else
+			return (src + ((dest - src) / speed));
+	}
+	else
+	{
+		if((src - dest) < 180)
+			return (src - ((src - dest) / speed));
+		else
+			return (src + ((360 - (src - dest)) / speed));
+	}
+} */
+
 // Calculates the normal of the plane described by the points p, q, and r.
 function calcNormal(p, q, r)
 {
@@ -865,4 +1420,15 @@ function removeFromList(o)
 	o.prev.next = o.next
 	if(o.next)
 		o.next.prev = o.prev
+}
+
+// Empties out a list
+function emptyList(l)
+{
+	while(l.next)
+	{
+		local o = l.next
+		removeFromList(o)
+		o.free()
+	}
 }
