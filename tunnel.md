@@ -2,7 +2,7 @@ module tunnel
 
 import gl
 import sdl: event, key
-import math: sin, cos
+import math: sin, cos, abs
 
 import config
 
@@ -24,6 +24,40 @@ function main()
 	loop()
 }
 
+class Obstacle
+{
+	freelist // static
+
+	ang
+	z
+	colliding
+	next
+	
+	function get(this: class, ang: float, z: float)
+	{
+		local ret
+
+		if(:freelist)
+		{
+			ret = :freelist
+			:freelist = ret.next
+		}
+		else
+			ret = Obstacle()
+
+		ret.ang = ang
+		ret.z = z
+		ret.colliding = false
+		return ret
+	}
+	
+	function free(this: class, obs: Obstacle)
+	{
+		obs.next = :freelist
+		:freelist = obs
+	}
+}
+
 // ===================================================================================
 // State
 // ===================================================================================
@@ -35,21 +69,52 @@ local keysHit = array.new(512, false)
 local shipModel
 local shipAng = 0.0
 local dShipAng = 0
+local shipMoveSpeed = 12
+local shipMoveMult = 0.15
+
 local shipAngLag = array.new(9, 0)
 local lagNewPtr = #shipAngLag - 1
 local lagOldPtr = 0
 local camAng = 0.0
 
 local levelModel
-local levelSegments = 40
-local levelOffs = 0
+local levelSegments = 60
+local levelSegmentLen = 4
+local levelSpeed = 1.1
+local levelOffs = 0.0
+local levelZ = 0.0
+
+local obstacleModel
+local obstacles = Obstacle() // dummy sentry node
+local obstacleAng = 0.0
 
 // ===================================================================================
-// Main functions
+// Code
 // ===================================================================================
 
 // Game setup
 function setup()
+{
+	setupGraphics()
+	setupResources()
+	setupEvents()
+}
+
+// Main game loop.
+function loop()
+{
+	while(!quitting)
+	{
+		doInput()
+		updatePlayer()
+		updateCamera()
+		updateLevel()
+		drawGraphics()
+	}
+}
+
+// Set up the window and graphics mode
+function setupGraphics()
 {
 	// Window
 	sdl.init(sdl.initEverything)
@@ -74,7 +139,7 @@ function setup()
 	gl.glShadeModel(gl.GL_FLAT)
 	gl.glClearColor(0, 0, 0, 1)
 	gl.glClearDepth(1)
-	gl.glEnable(gl.GL_CULL_FACE)
+// 	gl.glEnable(gl.GL_CULL_FACE)
 	gl.glEnable(gl.GL_DEPTH_TEST)
 	gl.glEnable(gl.GL_BLEND)
 	gl.glEnable(gl.GL_NORMALIZE)
@@ -84,23 +149,45 @@ function setup()
 	gl.glLoadIdentity()
 	gl.gluPerspective(45, toFloat(config.winWidth) / config.winHeight, 3, 1000)
 	gl.glMatrixMode(gl.GL_MODELVIEW)
-// 	gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
-// 	gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, float4(0, 0, 0, 1))
+	gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
+	gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, float4(0.1, 0.1, 0.1, 1))
+
 	gl.glEnable(gl.GL_LIGHT0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_SPOT_DIRECTION, float4(0, -1, 0, 0))
 	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.02);
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
 
-	// Resources
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+}
+
+// Load resources
+function setupResources()
+{
 	levelModel = makeTunnelPiece(30)
 	shipModel = loadModel("models/ship.obj")
-	
-	// Event handlers
+	obstacleModel = loadModel("models/obstacle.obj")
+
+	local obs = obstacles
+
+	for(i: 0 .. 180, 30)
+	{
+		for(j: 0 .. 360, 360/15)
+		{
+			obs.next = Obstacle.get(toFloat(j), -toFloat(i))
+			obs = obs.next
+		}
+	}
+}
+
+// Set up event handlers
+function setupEvents()
+{
 	event.setHandler$ event.quit, \{ quitting = true }
 	event.setHandler$ event.key, \pressed, sym, mod { keys[sym] = pressed; keysHit[sym] = pressed }
 }
 
 // Input/player control
-local function doInput()
+function doInput()
 {
 	keysHit.fill(false)
 	event.poll()
@@ -109,9 +196,9 @@ local function doInput()
 		quitting = true
 
 	if(keys[key.left] && !keys[key.right])
-		dShipAng += 1
-	else if(keys[key.right] && !keys[key.left])
 		dShipAng -= 1
+	else if(keys[key.right] && !keys[key.left])
+		dShipAng += 1
 	else
 	{
 		if(dShipAng > 0)
@@ -122,16 +209,16 @@ local function doInput()
 }
 
 // Player
-local function updatePlayer()
+function updatePlayer()
 {
-	dShipAng = clamp(dShipAng, -12, 12)
-	shipAng = (shipAng + dShipAng * 0.125) % 360
+	dShipAng = clamp(dShipAng, -shipMoveSpeed, shipMoveSpeed)
+	shipAng = (shipAng + dShipAng * shipMoveMult) % 360
 }
 
 // Camera
-local function updateCamera()
+function updateCamera()
 {
-	camAng = (camAng + shipAngLag[lagOldPtr] * 0.125) % 360
+	camAng = (camAng + shipAngLag[lagOldPtr] * shipMoveMult) % 360
 	shipAngLag[lagNewPtr] = dShipAng
 	lagNewPtr++
 	if(lagNewPtr == #shipAngLag)
@@ -142,49 +229,78 @@ local function updateCamera()
 }
 
 // Level stuff
-local function updateLevel()
+function updateLevel()
 {
-	levelOffs += 0.5
-	if(levelOffs > 3)
-		levelOffs -= 3
+	levelZ += levelSpeed
+	levelOffs += levelSpeed
+
+	if(levelOffs > levelSegmentLen)
+		levelOffs -= levelSegmentLen
+
+	obstacleAng = (obstacleAng + 5) % 360
+
+	for(local obs = obstacles; obs.next !is null; obs = obs.next)
+	{
+		local o = obs.next
+
+		o.z += levelSpeed
+		o.colliding = o.z > -32 && o.z < -28 && angDiff(o.ang, shipAng) < 15
+
+		if(o.z > 0)
+		{
+			//o.ang = math.frand(360.0)
+			o.z = -180
+		}
+	}
 }
 
 // Graphics
-local function drawGraphics()
+function drawGraphics()
 {
 	gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 		gl.glLoadIdentity()
-		gl.glRotatef(camAng, 0, 0, 1)
+		gl.glRotatef(-camAng, 0, 0, 1)
 
 		gl.glPushMatrix()
 			gl.glTranslatef(0, 0, levelOffs)
 			for(i: 0 .. levelSegments)
 			{
-				gl.glTranslatef(0, 0, -3)
+				gl.glTranslatef(0, 0, -levelSegmentLen)
 				gl.glCallList(levelModel)
 			}
 		gl.glPopMatrix()
 
+		for(local obs = obstacles.next; obs !is null; obs = obs.next)
+		{
+			if(obs.colliding)
+			{
+				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
+				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 0, 0, 1)
+			}
+			else
+			{
+				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
+			}
+
+			gl.glPushMatrix()
+				gl.glRotatef(obs.ang, 0, 0, 1)
+				gl.glTranslatef(0, -9, obs.z)
+				gl.glRotatef(obstacleAng, 0, 1, 0)
+				gl.glCallList(obstacleModel)
+			gl.glPopMatrix()
+		}
+
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
+
 		gl.glPushMatrix()
-			gl.glRotatef(-shipAng, 0, 0, 1)
+			gl.glRotatef(shipAng, 0, 0, 1)
 			gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
 			gl.glTranslatef(0, -9, -30)
 			gl.glCallList(shipModel)
 		gl.glPopMatrix()
 	sdl.gl.swapBuffers()
-}
-
-// Main game loop.
-function loop()
-{
-	while(!quitting)
-	{
-		doInput()
-		updatePlayer()
-		updateCamera()
-		updateLevel()
-		drawGraphics()
-	}
 }
 
 // ===================================================================================
@@ -224,10 +340,10 @@ function makeTunnelPiece(numSegments: int)
 				local nx, ny = -s, -c
 
 				gl.glNormal3f(nx, ny, 0)
-				gl.glVertex3f(p1x, p1y, 3)
+				gl.glVertex3f(p1x, p1y, levelSegmentLen)
 				gl.glVertex3f(p1x, p1y, 0)
 				gl.glVertex3f(p2x, p2y, 0)
-				gl.glVertex3f(p2x, p2y, 3)
+				gl.glVertex3f(p2x, p2y, levelSegmentLen)
 
 				p1x, p1y = p2x, p2y
 			}
@@ -248,19 +364,32 @@ function loadModel(filename: string)
 		if(line.startsWith("v "))
 			verts.append$ line[2..].split(" ").apply(toFloat)
 		else if(line.startsWith("f "))
-			faces.append$ line[2..].split(" ").apply(\s -> s.split("//").apply(toInt))
+			faces.append$ line[2..].split(" ").apply(\s -> toInt(s[..s.find('/')]))
 	}
 
 	local num = gl.glGenLists(1)
 	
 	gl.glNewList(num, gl.GL_COMPILE)
-		gl.glBegin(gl.GL_QUADS)
+		local prim = 3
+
+		gl.glBegin(gl.GL_TRIANGLES)
 			foreach(face; faces)
 			{
-				gl.glNormal3f$ calcNormal$ verts[face[0][0] - 1], verts[face[1][0] - 1], verts[face[2][0] - 1]
+				if(#face == 3 && prim == 4)
+				{
+					gl.glEnd()
+					gl.glBegin(gl.GL_TRIANGLES)
+				}
+				else if(#face == 4 && prim == 3)
+				{
+					gl.glEnd()
+					gl.glBegin(gl.GL_QUADS)
+				}
+
+				gl.glNormal3f$ calcNormal$ verts[face[0] - 1], verts[face[1] - 1], verts[face[2] - 1]
 
 				foreach(vert; face)
-					gl.glVertex3f(verts[vert[0] - 1].expand())
+					gl.glVertex3f(verts[vert - 1].expand())
 			}
 		gl.glEnd()
 	gl.glEndList()
@@ -302,3 +431,7 @@ function calcNormal(p, q, r)
 // Computes the cross product of 2 vectors.
 function cross(a1, a2, a3, b1, b2, b3)
 	return a2 * b3 - a3 * b2, a3 * b1 - a1 * b3, a1* b2 - a2 * b1
+
+// Computes the difference between two angles (the smallest distance in degrees).
+function angDiff(a1, a2) =
+	abs((a1 + 180 - a2) % 360  - 180)
