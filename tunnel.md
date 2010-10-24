@@ -33,7 +33,7 @@ Enemy types:
 	- Boss. Not too mobile, but must be hit in weak spots. Fires a lot. Must be killed. Very high health.
 
 Weapon types:
-	- Railgun. Boss killer. Very slow firing rate, shoots straight ahead, does a lot of damage.
+	- Railgun. Boss killer. Very slow firing rate, shoots straight ahead, only lasts a frame, does a lot of damage.
 
 SCORING:
 	- Mine: 10 pts
@@ -159,6 +159,7 @@ local playerHealth
 local playerWeaponLevel
 local playerWeapon
 local playerScore
+local playerFiringRailgun
 
 local playerAngLag = array.new(9, 0)
 local lagNewPtr
@@ -223,6 +224,18 @@ local playerWeaponDescs =
 			insertIntoList(Bullet.alloc(wrapAngle(playerAng - 3), -30.0, -15.0, :damage), playerBullets)
 		}
 	}
+	
+	{
+		level = 3
+		name = "railgun"
+		fireRate = 60
+		damage = 50
+
+		function fire()
+		{
+			playerFiringRailgun = 4
+		}
+	}
 ]
 
 // ===================================================================================
@@ -234,6 +247,7 @@ function resetState()
 	playerAng = 0.0
 	dPlayerAng = 0
 	playerHealth = 100
+	playerFiringRailgun = 0
 	playerAngLag.fill(0)
 	lagNewPtr = #playerAngLag - 1
 	lagOldPtr = 0
@@ -257,7 +271,7 @@ function resetState()
 	}
 
 	playerBulletDelayer = 0
-	playerWeaponLevel = 2 // TODO: default to 0
+	playerWeaponLevel = 3 // TODO: default to 0
 	playerWeapon = playerWeaponDescs[0]
 	playerScore = 0
 }
@@ -403,7 +417,9 @@ function doInput()
 		weaponChange = 1
 	else if(keysHit[key.c] && playerWeapon.level != 2)
 		weaponChange = 2
-		
+	else if(keysHit[key.v] && playerWeapon.level != 3)
+		weaponChange = 3
+
 	if(weaponChange <= playerWeaponLevel && weaponChange != playerWeapon.level)
 		changeWeapon(weaponChange)
 
@@ -417,7 +433,7 @@ function doInput()
 function changeWeapon(idx: int)
 {
 	playerWeapon = playerWeaponDescs[idx]
-	playerBulletDelayer = playerWeaponChangeDelay
+	playerBulletDelayer = math.max(playerWeaponChangeDelay, playerWeapon.fireRate)
 }
 
 // Player
@@ -457,6 +473,23 @@ function updatePlayer()
 				break
 			}
 		}
+	}
+
+	if(playerFiringRailgun)
+	{
+		// Check for collision with mines
+		for(local mine = mines; mine && mine.next !is null; mine = mine.next)
+		{
+			local m = mine.next
+
+			if(m.z < -30 && angDiff(playerAng, m.ang) < 7)
+			{
+				removeFromList(m)
+				m.free()
+			}
+		}
+
+		playerFiringRailgun--
 	}
 }
 
@@ -533,52 +566,8 @@ function draw3D()
 
 	drawLevel()
 	drawMines()
-	drawPlayerBullets()
 	drawPlayer()
-}
-
-function draw2D()
-{
-	gl.glMatrixMode(gl.GL_PROJECTION)
-	gl.glLoadMatrixf(projMat2D)
-	gl.glMatrixMode(gl.GL_MODELVIEW)
-	gl.glDisable(gl.GL_LIGHTING)
-	gl.glLoadIdentity()
-	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-	text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
-	text.drawText(0, 45, "ANG:{}", playerAng)
-
-	drawHealthBar()
-}
-
-function drawHealthBar()
-{
-	gl.glPushMatrix()
-		gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
-		gl.glBegin(gl.GL_LINE_STRIP)
-			gl.glVertex2f(-80, 10)
-			gl.glVertex2f(80, 10)
-			gl.glVertex2f(80, -10)
-			gl.glVertex2f(-80, -10)
-			gl.glVertex2f(-80, 10)
-		gl.glEnd()
-
-		local temp = playerHealth / 100.0
-		gl.glColor3f(1 - temp, temp, 0)
-		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
-
-		gl.glScalef(temp, 1, 1)
-		gl.glBegin(gl.GL_QUADS)
-			gl.glVertex2f(-80, 10)
-			gl.glVertex2f(80, 10)
-			gl.glVertex2f(80, -10)
-			gl.glVertex2f(-80, -10)
-		gl.glEnd()
-
-		gl.glColor3f(1, 1, 1)
-		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
-
-	gl.glPopMatrix()
+	drawPlayerBullets()
 }
 
 function drawLevel()
@@ -625,6 +614,24 @@ function drawPlayerBullets()
 			gl.glCallList(bulletModel)
 		gl.glPopMatrix()
 	}
+
+	if(playerFiringRailgun)
+	{
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 0, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 1, 0, 1)
+		
+		gl.glPushMatrix()
+			gl.glRotatef(playerAng, 0, 0, 1)
+			gl.glTranslatef(0, -9, -30)
+			gl.glBegin(gl.GL_LINE_STRIP)
+				for(i: 0 .. 240, 20)
+				{
+					gl.glVertex3f(1, 0, -i)
+					gl.glVertex3f(-1, 0, -i - 10)
+				}
+			gl.glEnd()
+		gl.glPopMatrix()
+	}
 }
 
 function drawPlayer()
@@ -637,6 +644,50 @@ function drawPlayer()
 		gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -8, -23, 1))
 		gl.glTranslatef(0, -9, -30)
 		gl.glCallList(playerModel)
+	gl.glPopMatrix()
+}
+
+function draw2D()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat2D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glDisable(gl.GL_LIGHTING)
+	gl.glLoadIdentity()
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
+	text.drawText(0, 45, "ANG:{}", playerAng)
+
+	drawHealthBar()
+}
+
+function drawHealthBar()
+{
+	gl.glPushMatrix()
+		gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
+		gl.glBegin(gl.GL_LINE_STRIP)
+			gl.glVertex2f(-80, 10)
+			gl.glVertex2f(80, 10)
+			gl.glVertex2f(80, -10)
+			gl.glVertex2f(-80, -10)
+			gl.glVertex2f(-80, 10)
+		gl.glEnd()
+
+		local temp = playerHealth / 100.0
+		gl.glColor3f(1 - temp, temp, 0)
+		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
+
+		gl.glScalef(temp, 1, 1)
+		gl.glBegin(gl.GL_QUADS)
+			gl.glVertex2f(-80, 10)
+			gl.glVertex2f(80, 10)
+			gl.glVertex2f(80, -10)
+			gl.glVertex2f(-80, -10)
+		gl.glEnd()
+
+		gl.glColor3f(1, 1, 1)
+		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
+
 	gl.glPopMatrix()
 }
 
