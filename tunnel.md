@@ -24,37 +24,85 @@ function main()
 	loop()
 }
 
+function FreeList(T: class)
+{
+	T._freelist_ = null
+	T.next = null
+	
+	if(hasMethod(T, "initialize"))
+	{
+		T.alloc = function alloc(this: class, vararg)
+		{
+			local n
+
+			if(:_freelist_)
+			{
+				n = :_freelist_
+				:_freelist_ = n.next
+			}
+			else
+				n = this()
+
+			n.initialize(vararg)
+			return n
+		}
+	}
+	else
+	{
+		T.alloc = function alloc(this: class)
+		{
+			local n
+
+			if(:_freelist_)
+			{
+				n = :_freelist_
+				:_freelist_ = n.next
+			}
+			else
+				n = this()
+
+			return n
+		}
+	}
+
+	T.free = function free(this: instance)
+	{
+		:next = :_freelist_
+		:super._freelist_ = this
+	}
+
+	return T
+}
+
+@FreeList
 class Obstacle
 {
-	freelist // static
-
 	ang
 	z
 	colliding
-	next
-	
-	function get(this: class, ang: float, z: float)
+	prev
+
+	function initialize(ang: float, z: float)
 	{
-		local ret
-
-		if(:freelist)
-		{
-			ret = :freelist
-			:freelist = ret.next
-		}
-		else
-			ret = Obstacle()
-
-		ret.ang = ang
-		ret.z = z
-		ret.colliding = false
-		return ret
+		:ang = ang
+		:z = z
+		:colliding = false
 	}
-	
-	function free(this: class, obs: Obstacle)
+}
+
+@FreeList
+class Bullet
+{
+	ang
+	z
+	dir
+	prev
+
+	function initialize(ang: float, z: float, dir: float)
 	{
-		obs.next = :freelist
-		:freelist = obs
+		:ang = ang
+		:z = z
+		:dir = dir
 	}
 }
 
@@ -87,6 +135,10 @@ local levelZ = 0.0
 local obstacleModel
 local obstacles = Obstacle() // dummy sentry node
 local obstacleAng = 0.0
+
+local playerBullets = Bullet() // dummy sentry node
+local playerBulletSpeed = 1
+local playerBulletDelay = 0
 
 // ===================================================================================
 // Code
@@ -154,8 +206,10 @@ function setupGraphics()
 
 	gl.glEnable(gl.GL_LIGHT0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_SPOT_DIRECTION, float4(0, -1, 0, 0))
-	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.02);
+// 	gl.glLightf(gl.GL_LIGHT0, gl.GL_LINEAR_ATTENUATION, 1);
+	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.05);
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
+// 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(0, 1, 0, 1))
 
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
 }
@@ -173,7 +227,8 @@ function setupResources()
 	{
 		for(j: 0 .. 360, 360/15)
 		{
-			obs.next = Obstacle.get(toFloat(j), -toFloat(i))
+			obs.next = Obstacle.alloc(toFloat(j), -toFloat(i))
+			obs.next.prev = obs
 			obs = obs.next
 		}
 	}
@@ -206,19 +261,56 @@ function doInput()
 		else if(dShipAng < 0)
 			dShipAng += 1
 	}
+
+	if(playerBulletDelay == 0 && keys[key.space])
+	{
+		playerBulletDelay = 14
+		local b = Bullet.alloc(shipAng, -30.0, 0.0)
+		insertIntoList(b, playerBullets)
+	}
 }
 
 // Player
 function updatePlayer()
 {
 	dShipAng = clamp(dShipAng, -shipMoveSpeed, shipMoveSpeed)
-	shipAng = (shipAng + dShipAng * shipMoveMult) % 360
+	shipAng = wrapAngle(shipAng + dShipAng * shipMoveMult)
+
+	if(playerBulletDelay > 0)
+		playerBulletDelay--
+
+	for(local bul = playerBullets; bul && bul.next !is null; bul = bul.next)
+	{
+		local b = bul.next
+
+		b.z -= playerBulletSpeed
+
+		if(b.z < -180)
+		{
+			removeFromList(b)
+			b.free()
+			continue
+		}
+
+		// Check for collision with obstacles
+		for(local obs = obstacles.next; obs !is null; obs = obs.next)
+		{
+			if(abs(b.z - obs.z) < 1 && angDiff(b.ang, obs.ang) < 7)
+			{
+				removeFromList(obs)
+				obs.free()
+				removeFromList(b)
+				b.free()
+				break
+			}
+		}
+	}
 }
 
 // Camera
 function updateCamera()
 {
-	camAng = (camAng + shipAngLag[lagOldPtr] * shipMoveMult) % 360
+	camAng = wrapAngle(camAng + shipAngLag[lagOldPtr] * shipMoveMult)
 	shipAngLag[lagNewPtr] = dShipAng
 	lagNewPtr++
 	if(lagNewPtr == #shipAngLag)
@@ -237,7 +329,7 @@ function updateLevel()
 	if(levelOffs > levelSegmentLen)
 		levelOffs -= levelSegmentLen
 
-	obstacleAng = (obstacleAng + 5) % 360
+	obstacleAng = wrapAngle(obstacleAng + 5)
 
 	for(local obs = obstacles; obs.next !is null; obs = obs.next)
 	{
@@ -247,10 +339,7 @@ function updateLevel()
 		o.colliding = o.z > -32 && o.z < -28 && angDiff(o.ang, shipAng) < 15
 
 		if(o.z > 0)
-		{
-			//o.ang = math.frand(360.0)
 			o.z = -180
-		}
 	}
 }
 
@@ -261,6 +350,8 @@ function drawGraphics()
 		gl.glLoadIdentity()
 		gl.glRotatef(-camAng, 0, 0, 1)
 
+		// Draw Level
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 1, 0, 1)
 		gl.glPushMatrix()
 			gl.glTranslatef(0, 0, levelOffs)
 			for(i: 0 .. levelSegments)
@@ -270,19 +361,12 @@ function drawGraphics()
 			}
 		gl.glPopMatrix()
 
+		// Draw obstacles
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.5, 0, 0, 1)
+
 		for(local obs = obstacles.next; obs !is null; obs = obs.next)
 		{
-			if(obs.colliding)
-			{
-				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
-				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(1, 0, 0, 1)
-			}
-			else
-			{
-				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-				gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
-			}
-
 			gl.glPushMatrix()
 				gl.glRotatef(obs.ang, 0, 0, 1)
 				gl.glTranslatef(0, -9, obs.z)
@@ -291,8 +375,21 @@ function drawGraphics()
 			gl.glPopMatrix()
 		}
 
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 0, 1, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 1, 1)
+
+		for(local bullet = playerBullets.next; bullet !is null; bullet = bullet.next)
+		{
+			gl.glPushMatrix()
+				gl.glRotatef(bullet.ang, 0, 0, 1)
+				gl.glTranslatef(0, -9, bullet.z)
+				gl.glCallList(obstacleModel)
+			gl.glPopMatrix()
+		}
+
+		// Draw player
 		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.3, 0.3, 0.3, 1)
 
 		gl.glPushMatrix()
 			gl.glRotatef(shipAng, 0, 0, 1)
@@ -300,6 +397,8 @@ function drawGraphics()
 			gl.glTranslatef(0, -9, -30)
 			gl.glCallList(shipModel)
 		gl.glPopMatrix()
+
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
 	sdl.gl.swapBuffers()
 }
 
@@ -410,13 +509,30 @@ function wrap(v, min, max)
 		while(v < min)
 			v += d
 	}
-	else if(v > max)
+	else if(v >= max)
 	{
 		local d = max - min
 		while(v >= max)
 			v -= d
 	}
 
+	return v
+}
+
+// Keeps v in the range [0, 360).
+function wrapAngle(v)
+{
+	if(v < 0)
+	{
+		while(v < 0)
+			v += 360
+	}
+	else if(v >= 360)
+	{
+		while(v >= 360)
+			v -= 360
+	}
+	
 	return v
 }
 
@@ -435,3 +551,21 @@ function cross(a1, a2, a3, b1, b2, b3)
 // Computes the difference between two angles (the smallest distance in degrees).
 function angDiff(a1, a2) =
 	abs((a1 + 180 - a2) % 360  - 180)
+
+// Inserts the object o at the head of the doubly linked list l.
+function insertIntoList(o, l)
+{
+	o.next = l.next
+	if(o.next)
+		o.next.prev = o
+	o.prev = l
+	l.next = o
+}
+
+// Removes the object o from its list.
+function removeFromList(o)
+{
+	o.prev.next = o.next
+	if(o.next)
+		o.next.prev = o.prev
+}
