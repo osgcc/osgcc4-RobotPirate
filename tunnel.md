@@ -33,9 +33,6 @@ Enemy types:
 	- Boss. Not too mobile, but must be hit in weak spots. Fires a lot. Must be killed. Very high health.
 
 Weapon types:
-	- Single shooter. Slow firing rate; small bullet fired straight ahead; doesn't do much damage.
-	- Double shooter. Slightly higher rate; two streams of the above.
-	- Three-way shooter. Highest firing rate; shoots in a small spread, and each bullet does more damage.
 	- Railgun. Boss killer. Very slow firing rate, shoots straight ahead, does a lot of damage.
 
 SCORING:
@@ -107,7 +104,7 @@ function FreeList(T: class)
 }
 
 @FreeList
-class Obstacle
+class Mine
 {
 	ang
 	z
@@ -129,12 +126,14 @@ class Bullet
 	z
 	dir
 	prev
+	damage
 
-	function initialize(ang: float, z: float, dir: float)
+	function initialize(ang: float, z: float, dir: float, damage: int)
 	{
 		:ang = ang
 		:z = z
 		:dir = dir * ToRad
+		:damage = damage
 	}
 }
 
@@ -150,39 +149,118 @@ local quitting = false
 local keys = array.new(512, false)
 local keysHit = array.new(512, false)
 
-local shipModel
-local shipAng = 0.0
-local dShipAng = 0
-local shipMoveSpeed = 12
-local shipMoveMult = 0.15
-local playerHealth = 100
+local playerMoveSpeed = 12
+local playerMoveMult = 0.15
+local playerWeaponChangeDelay = 20
+local playerModel
+local playerAng
+local dPlayerAng
+local playerHealth
+local playerWeaponLevel
+local playerWeapon
+local playerScore
 
-local shipAngLag = array.new(9, 0)
-local lagNewPtr = #shipAngLag - 1
-local lagOldPtr = 0
-local camAng = 0.0
+local playerAngLag = array.new(9, 0)
+local lagNewPtr
+local lagOldPtr
+local camAng
 
-local levelModel
 local levelSegments = 30
 local levelSegmentLen = 8
 local levelSpeed = 1.1
-local levelOffs = 0.0
-local levelZ = 0.0
+local levelModel
+local levelOffs
+local levelZ
 
-local obstacleModel
-local obstacles = Obstacle() // dummy sentry node
-local obstacleAng = 0.0
-local obsDamageAmount = 5
+local mineDamageAmount = 5
+local mines = Mine() // dummy sentry node
+local mineModel
+local mineAng
 
-local playerBullets = Bullet() // dummy sentry node
 local playerBulletSpeed = 2
-local playerBulletDelayer = 0
 local playerBulletDelay = 14
+local playerBullets = Bullet() // dummy sentry node
+local playerBulletDelayer
 local bulletModel
+
+local playerWeaponDescs =
+[
+	{
+		level = 0
+		name = "shooter1"
+		fireRate = 14
+		damage = 1
+
+		function fire()
+		{
+			insertIntoList(Bullet.alloc(playerAng, -30.0, 0.0, :damage), playerBullets)
+		}
+	}
+
+	{
+		level = 1
+		name = "shooter2"
+		fireRate = 12
+		damage = 2
+
+		function fire()
+		{
+			insertIntoList(Bullet.alloc(wrapAngle(playerAng + 3), -30.0, 0.0, :damage), playerBullets)
+			insertIntoList(Bullet.alloc(wrapAngle(playerAng - 3), -30.0, 0.0, :damage), playerBullets)
+		}
+	}
+
+	{
+		level = 2
+		name = "shooter3"
+		fireRate = 10
+		damage = 3
+
+		function fire()
+		{
+			insertIntoList(Bullet.alloc(playerAng, -30.0, 0.0, :damage), playerBullets)
+			insertIntoList(Bullet.alloc(wrapAngle(playerAng + 3), -30.0, 15.0, :damage), playerBullets)
+			insertIntoList(Bullet.alloc(wrapAngle(playerAng - 3), -30.0, -15.0, :damage), playerBullets)
+		}
+	}
+]
 
 // ===================================================================================
 // Code
 // ===================================================================================
+
+function resetState()
+{
+	playerAng = 0.0
+	dPlayerAng = 0
+	playerHealth = 100
+	playerAngLag.fill(0)
+	lagNewPtr = #playerAngLag - 1
+	lagOldPtr = 0
+	camAng = 0.0
+	mineAng = 0.0
+	levelOffs = 0.0
+	levelZ = 0.0
+
+	while(mines.next)
+	{
+		local m = mines.next
+		removeFromList(m)
+		m.free()
+	}
+
+	while(playerBullets.next)
+	{
+		local b = playerBullets.next
+		removeFromList(b)
+		b.free()
+	}
+
+	playerBulletDelayer = 0
+	playerWeaponLevel = 2 // TODO: default to 0
+	playerWeapon = playerWeaponDescs[0]
+	playerScore = 0
+}
 
 // Game setup
 function setup()
@@ -190,6 +268,7 @@ function setup()
 	setupGraphics()
 	setupResources()
 	setupEvents()
+	resetState()
 }
 
 // Main game loop.
@@ -205,7 +284,7 @@ function loop()
 		updateCamera()
 		updateLevel()
 		drawGraphics()
-		
+
 		frames++
 		local dt = time.microTime() - t
 		
@@ -275,7 +354,7 @@ function setupGraphics()
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(0, 10, 0, 1))
 
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-	
+
 	text.setup()
 }
 
@@ -283,8 +362,8 @@ function setupGraphics()
 function setupResources()
 {
 	levelModel = makeTunnelPiece(20)
-	shipModel = loadModel("models/ship.obj")
-	obstacleModel = loadModel("models/obstacle.obj")
+	playerModel = loadModel("models/ship.obj")
+	mineModel = loadModel("models/obstacle.obj")
 	bulletModel = loadModel("models/bullet.obj")
 }
 
@@ -305,31 +384,47 @@ function doInput()
 		quitting = true
 
 	if(keys[key.left] && !keys[key.right])
-		dShipAng -= 1
+		dPlayerAng -= 1
 	else if(keys[key.right] && !keys[key.left])
-		dShipAng += 1
+		dPlayerAng += 1
 	else
 	{
-		if(dShipAng > 0)
-			dShipAng -= 1
-		else if(dShipAng < 0)
-			dShipAng += 1
+		if(dPlayerAng > 0)
+			dPlayerAng -= 1
+		else if(dPlayerAng < 0)
+			dPlayerAng += 1
 	}
+	
+	local weaponChange = playerWeapon.level
+
+	if(keysHit[key.z])
+		weaponChange = 0
+	else if(keysHit[key.x] && playerWeapon.level != 1)
+		weaponChange = 1
+	else if(keysHit[key.c] && playerWeapon.level != 2)
+		weaponChange = 2
+		
+	if(weaponChange <= playerWeaponLevel && weaponChange != playerWeapon.level)
+		changeWeapon(weaponChange)
 
 	if(playerBulletDelayer == 0 && keys[key.space])
 	{
-		playerBulletDelayer = playerBulletDelay
-		insertIntoList(Bullet.alloc(shipAng, -30.0, 0.0), playerBullets)
-// 		insertIntoList(Bullet.alloc(shipAng, -30.0, 75.0), playerBullets)
-// 		insertIntoList(Bullet.alloc(shipAng, -30.0, -75.0), playerBullets)
+		playerBulletDelayer = playerWeapon.fireRate
+		playerWeapon.fire()
 	}
+}
+
+function changeWeapon(idx: int)
+{
+	playerWeapon = playerWeaponDescs[idx]
+	playerBulletDelayer = playerWeaponChangeDelay
 }
 
 // Player
 function updatePlayer()
 {
-	dShipAng = clamp(dShipAng, -shipMoveSpeed, shipMoveSpeed)
-	shipAng = wrapAngle(shipAng + dShipAng * shipMoveMult)
+	dPlayerAng = clamp(dPlayerAng, -playerMoveSpeed, playerMoveSpeed)
+	playerAng = wrapAngle(playerAng + dPlayerAng * playerMoveMult)
 
 	if(playerBulletDelayer > 0)
 		playerBulletDelayer--
@@ -350,13 +445,13 @@ function updatePlayer()
 			continue
 		}
 
-		// Check for collision with obstacles
-		for(local obs = obstacles.next; obs !is null; obs = obs.next)
+		// Check for collision with mines
+		for(local mine = mines.next; mine !is null; mine = mine.next)
 		{
-			if(abs(b.z - obs.z) < 2 && angDiff(b.ang, obs.ang) < 7)
+			if(abs(b.z - mine.z) < 2 && angDiff(b.ang, mine.ang) < 7)
 			{
-				removeFromList(obs)
-				obs.free()
+				removeFromList(mine)
+				mine.free()
 				removeFromList(b)
 				b.free()
 				break
@@ -368,13 +463,13 @@ function updatePlayer()
 // Camera
 function updateCamera()
 {
-	camAng = wrapAngle(camAng + shipAngLag[lagOldPtr] * shipMoveMult)
-	shipAngLag[lagNewPtr] = dShipAng
+	camAng = wrapAngle(camAng + playerAngLag[lagOldPtr] * playerMoveMult)
+	playerAngLag[lagNewPtr] = dPlayerAng
 	lagNewPtr++
-	if(lagNewPtr == #shipAngLag)
+	if(lagNewPtr == #playerAngLag)
 		lagNewPtr = 0
 	lagOldPtr++
-	if(lagOldPtr == #shipAngLag)
+	if(lagOldPtr == #playerAngLag)
 		lagOldPtr = 0
 }
 
@@ -384,34 +479,34 @@ function updateLevel()
 	levelZ += levelSpeed
 	
 	if(levelZ % 20 < 1)
-		insertIntoList(Obstacle.alloc(math.frand(360.0), -240.0), obstacles)
+		insertIntoList(Mine.alloc(math.frand(360.0), -240.0), mines)
 
 	levelOffs += levelSpeed
 
 	if(levelOffs > levelSegmentLen)
 		levelOffs -= levelSegmentLen
 
-	obstacleAng = wrapAngle(obstacleAng + 5)
+	mineAng = wrapAngle(mineAng + 5)
 
-	for(local obs = obstacles; obs && obs.next !is null; obs = obs.next)
+	for(local mine = mines; mine && mine.next !is null; mine = mine.next)
 	{
-		local o = obs.next
+		local m = mine.next
 
-		o.z += levelSpeed
+		m.z += levelSpeed
 		
-		if(abs(o.z + 30) < 2 && angDiff(o.ang, shipAng) < 15)
+		if(abs(m.z + 30) < 2 && angDiff(m.ang, playerAng) < 15)
 		{
 			// TODO: show effect
-			damagePlayer(obsDamageAmount, true)
-			removeFromList(o)
-			o.free()
+			damagePlayer(mineDamageAmount, true)
+			removeFromList(m)
+			m.free()
 			continue
 		}
 
-		if(o.z > 0)
+		if(m.z > 0)
 		{
-			removeFromList(o)
-			o.free()
+			removeFromList(m)
+			m.free()
 			continue
 		}
 	}
@@ -437,7 +532,7 @@ function draw3D()
 	gl.glRotatef(-camAng, 0, 0, 1)
 
 	drawLevel()
-	drawObstacles()
+	drawMines()
 	drawPlayerBullets()
 	drawPlayer()
 }
@@ -451,7 +546,7 @@ function draw2D()
 	gl.glLoadIdentity()
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
 	text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
-	text.drawText(0, 45, "ANG:{}", shipAng)
+	text.drawText(0, 45, "ANG:{}", playerAng)
 
 	drawHealthBar()
 }
@@ -501,18 +596,18 @@ function drawLevel()
 	gl.glPopMatrix()
 }
 
-function drawObstacles()
+function drawMines()
 {
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.5, 0, 0, 1)
 
-	for(local obs = obstacles.next; obs !is null; obs = obs.next)
+	for(local mine = mines.next; mine !is null; mine = mine.next)
 	{
 		gl.glPushMatrix()
-			gl.glRotatef(obs.ang, 0, 0, 1)
-			gl.glTranslatef(0, -9, obs.z)
-			gl.glRotatef(obstacleAng, 0, 1, 0)
-			gl.glCallList(obstacleModel)
+			gl.glRotatef(mine.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, mine.z)
+			gl.glRotatef(mineAng, 0, 1, 0)
+			gl.glCallList(mineModel)
 		gl.glPopMatrix()
 	}
 }
@@ -538,10 +633,10 @@ function drawPlayer()
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.8, 0.8, 0.8, 1)
 
 	gl.glPushMatrix()
-		gl.glRotatef(shipAng, 0, 0, 1)
+		gl.glRotatef(playerAng, 0, 0, 1)
 		gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -8, -23, 1))
 		gl.glTranslatef(0, -9, -30)
-		gl.glCallList(shipModel)
+		gl.glCallList(playerModel)
 	gl.glPopMatrix()
 }
 
