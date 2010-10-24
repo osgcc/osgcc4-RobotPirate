@@ -24,12 +24,6 @@ import math: sin, cos
 		gl.glGenBuffers(1, tmp)
 		return tmp[0]
 	}
-
-	function genOneList()
-	{
-		gl.glGenLists(1, tmp)
-		return tmp[0]
-	}
 }
 
 function loop()
@@ -41,20 +35,20 @@ function loop()
 	local keysHit = array.new(512, false)
 	event.setHandler$ event.key, \pressed, sym, mod { keys[sym] = pressed; keysHit[sym] = pressed }
 
-// 	gl.glClearColor(26/255.0, 26/255.0, 26/255.0, 1)
 	gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, float4(0, 0, 0, 1))
 	gl.glEnable(gl.GL_LIGHT0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -7, -30, 1))
-// 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT,  float4(0.3, 0.3, 0.3, 1))
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_SPOT_DIRECTION, float4(0, -1, 0, 0))
 	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.02);
-// 	gl.glLightf(gl.GL_LIGHT0, gl.GL_SPOT_CUTOFF, 45)
-// 	gl.glLightf(gl.GL_LIGHT0, gl.GL_SPOT_EXPONENT, 24)
+
+// 	gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
 
 	local rot = 0.0
 	local d = makeDerp(30)
 	local n = 40
 	local offs = 0
+
+	local ship = loadModel("models/ship.obj")
 
 	while(!quitting)
 	{
@@ -64,22 +58,19 @@ function loop()
 		if(keys[key.escape])
 			quitting = true
 
-		if(keys[key.space])
-		{
-			offs += 0.5
-			if(offs > 8)
-				offs -= 8
-		}
+		offs += 0.5
+		if(offs > 3)
+			offs -= 3
 
-		if(keys[key.up])
+		if(keys[key.left])
 			rot -= 1
-		else if(keys[key.down])
+		else if(keys[key.right])
 			rot += 1
 
 		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
 			gl.glLoadIdentity()
-			gl.glRotatef(rot, 1, 0, 0)
-			gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -30, 1))
+			gl.glRotatef(rot, 0, 0, 1)
+			gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
 
 			gl.glPushMatrix()
 				gl.glTranslatef(0, 0, offs)
@@ -89,13 +80,18 @@ function loop()
 					gl.glCallList(d)
 				}
 			gl.glPopMatrix()
+
+			gl.glPushMatrix()
+				gl.glTranslatef(0, -9, -30)
+				gl.glCallList(ship)
+			gl.glPopMatrix()
 		sdl.gl.swapBuffers()
 	}
 }
 
 function makeDerp(numSegments: int)
 {
-	local num = genOneList()
+	local num = gl.glGenLists(1)
 
 	gl.glNewList(num, gl.GL_COMPILE)
 		gl.glBegin(gl.GL_QUADS)
@@ -123,4 +119,44 @@ function makeDerp(numSegments: int)
 	gl.glEndList()
 
 	return num
+}
+
+function loadModel(filename: string)
+{
+	local verts = []
+	local faces = []
+
+	foreach(line; io.lines(filename))
+	{
+		if(line.startsWith("v "))
+			verts.append$ line[2..].split(" ").apply(toFloat)
+		else if(line.startsWith("f "))
+			faces.append$ line[2..].split(" ").apply(\s -> s.split("//").apply(toInt))
+	}
+
+	local num = gl.glGenLists(1)
+	
+	dumpVal(verts)
+
+	gl.glNewList(num, gl.GL_COMPILE)
+		gl.glBegin(gl.GL_QUADS)
+			foreach(face; faces)
+			{
+				gl.glNormal3f$ calcNormal$ verts[face[0][0] - 1], verts[face[1][0] - 1], verts[face[2][0] - 1]
+
+				foreach(vert; face)
+					gl.glVertex3f(verts[vert[0] - 1].expand())
+			}
+		gl.glEnd()
+	gl.glEndList()
+
+	return num
+}
+
+function calcNormal(p, q, r)
+{
+	local a1, a2, a3 = q[0] - p[0], q[1] - p[1], q[2] - p[2]
+	local b1, b2, b3 = r[0] - p[0], r[1] - p[1], r[2] - p[2]
+
+	return a2 * b3 - a3 * b2, a3 * b1 - a1 * b3, a1* b2 - a2 * b1
 }

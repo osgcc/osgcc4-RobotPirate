@@ -12,3 +12,11 @@ function main()
 		
 	game.loop()
 }
+
+/*
+- player/camera/movement
+- obstacles
+- bullets
+- enemies
+- DERP
+*/
