@@ -4,6 +4,7 @@ import gl
 
 local draw
 local chars = array.new(128, null)
+local sbuf = StringBuffer()
 
 function drawChar(c: char)
 {
@@ -28,12 +29,14 @@ function setup()
 
 function drawText(x: int, y: int, vararg)
 {
+	local len = sbuf.formatPos(0, vararg)
+
 	gl.glPushMatrix()
 		gl.glTranslatef(x, y, 0)
 
-		foreach(c; format(vararg))
+		for(i: 0 .. len)
 		{
-			drawChar(c)
+			drawChar(sbuf[i])
 			gl.glTranslatef(24, 0, 0)
 		}
 	gl.glPopMatrix()

@@ -114,6 +114,7 @@ class Bullet
 
 local projMat2D = Vector(gl.GLfloat, 16)
 local projMat3D = Vector(gl.GLfloat, 16)
+local fps = 0
 
 local quitting = false
 local keys = array.new(512, false)
@@ -124,6 +125,7 @@ local shipAng = 0.0
 local dShipAng = 0
 local shipMoveSpeed = 12
 local shipMoveMult = 0.15
+local playerHealth = 100
 
 local shipAngLag = array.new(9, 0)
 local lagNewPtr = #shipAngLag - 1
@@ -140,11 +142,13 @@ local levelZ = 0.0
 local obstacleModel
 local obstacles = Obstacle() // dummy sentry node
 local obstacleAng = 0.0
+local obsDamageAmount = 5
 
 local playerBullets = Bullet() // dummy sentry node
 local playerBulletSpeed = 2
 local playerBulletDelayer = 0
 local playerBulletDelay = 14
+local bulletModel
 
 // ===================================================================================
 // Code
@@ -161,6 +165,9 @@ function setup()
 // Main game loop.
 function loop()
 {
+	local t = time.microTime()
+	local frames = 0
+
 	while(!quitting)
 	{
 		doInput()
@@ -168,6 +175,16 @@ function loop()
 		updateCamera()
 		updateLevel()
 		drawGraphics()
+		
+		frames++
+		local dt = time.microTime() - t
+		
+		if(dt >= 1_000_000)
+		{
+			t = time.microTime()
+			fps = frames / (dt / 1_000_000.0)
+			frames = 0
+		}
 	}
 }
 
@@ -221,10 +238,11 @@ function setupGraphics()
 
 	gl.glEnable(gl.GL_LIGHT0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_SPOT_DIRECTION, float4(0, -1, 0, 0))
-// 	gl.glLightf(gl.GL_LIGHT0, gl.GL_LINEAR_ATTENUATION, 1);
+// 	gl.glLightf(gl.GL_LIGHT0, gl.GL_LINEAR_ATTENUATION, 0.001);
 	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.1);
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
-	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10, 10, 10, 1))
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(0, 10, 0, 1))
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(0, 10, 0, 1))
 
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
 	
@@ -237,6 +255,7 @@ function setupResources()
 	levelModel = makeTunnelPiece(30)
 	shipModel = loadModel("models/ship.obj")
 	obstacleModel = loadModel("models/obstacle.obj")
+	bulletModel = loadModel("models/bullet.obj")
 
 	local obs = obstacles
 
@@ -360,7 +379,8 @@ function updateLevel()
 		
 		if(abs(o.z + 30) < 2 && angDiff(o.ang, shipAng) < 15)
 		{
-			// TODO: damage player, show effect..
+			// TODO: show effect
+			damagePlayer(obsDamageAmount, true)
 			removeFromList(o)
 			o.free()
 			continue
@@ -378,6 +398,8 @@ function drawGraphics()
 		gl.glMatrixMode(gl.GL_PROJECTION)
 		gl.glLoadMatrixf(projMat3D)
 		gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glEnable(gl.GL_LIGHTING)
+
 
 		gl.glLoadIdentity()
 		gl.glRotatef(-camAng, 0, 0, 1)
@@ -390,15 +412,44 @@ function drawGraphics()
 		gl.glMatrixMode(gl.GL_PROJECTION)
 		gl.glLoadMatrixf(projMat2D)
 		gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glDisable(gl.GL_LIGHTING)
 		gl.glLoadIdentity()
-		text.drawText(0, 20, "hello")
+		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+		text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
+
+		gl.glPushMatrix()
+			gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
+			gl.glBegin(gl.GL_LINE_STRIP)
+				gl.glVertex2f(-80, 10)
+				gl.glVertex2f(80, 10)
+				gl.glVertex2f(80, -10)
+				gl.glVertex2f(-80, -10)
+				gl.glVertex2f(-80, 10)
+			gl.glEnd()
+
+			local temp = playerHealth / 100.0
+			gl.glColor3f(1 - temp, temp, 0)
+			gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
+
+			gl.glScalef(temp, 1, 1)
+			gl.glBegin(gl.GL_QUADS)
+				gl.glVertex2f(-78, 8)
+				gl.glVertex2f(78, 8)
+				gl.glVertex2f(78, -8)
+				gl.glVertex2f(-78, -8)
+			gl.glEnd()
+
+			gl.glColor3f(1, 1, 1)
+			gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
+
+		gl.glPopMatrix()
 	sdl.gl.swapBuffers()
 }
 
 function drawLevel()
 {
-	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 1, 0, 1)
-	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0.05, 0, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.05, 0.05, 0.05, 1)
 
 	gl.glPushMatrix()
 		gl.glTranslatef(0, 0, levelOffs)
@@ -436,9 +487,9 @@ function drawPlayerBullets()
 		gl.glPushMatrix()
 			gl.glRotatef(bullet.ang, 0, 0, 1)
 			gl.glTranslatef(0, -9, bullet.z)
-			gl.glCallList(obstacleModel)
+			gl.glCallList(bulletModel)
 		gl.glPopMatrix()
-	}	
+	}
 }
 
 function drawPlayer()
@@ -452,6 +503,14 @@ function drawPlayer()
 		gl.glTranslatef(0, -9, -30)
 		gl.glCallList(shipModel)
 	gl.glPopMatrix()
+}
+
+function damagePlayer(amt: int, explosive: bool = false)
+{
+	playerHealth = clamp(playerHealth - amt, 0, 100)
+	local temp = playerHealth / 10.0
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10 - temp, temp, 0, 1))
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(10 - temp, temp, 0, 1))
 }
 
 // ===================================================================================
