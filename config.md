@@ -1,5 +1,4 @@
 module config
 
-global winWidth = 1024
-global winHeight = 768
-
+global winWidth = 800
+global winHeight = 600

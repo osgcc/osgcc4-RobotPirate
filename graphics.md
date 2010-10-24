@@ -8,7 +8,7 @@ import config
 function init()
 {
 	sdl.init(sdl.initEverything)
-	
+
 	scope(failure)
 		sdl.quit()
 
@@ -19,10 +19,10 @@ function init()
 	if(!sdl.setVideoMode(config.winWidth, config.winHeight, 32, sdl.opengl | sdl.hwSurface))
 		if(!sdl.setVideoMode(config.winWidth, config.winHeight, 32, sdl.opengl | sdl.swSurface))
 			throw "Could not set video mode"
-			
+
 	sdl.setCaption("Tunnel")
 	sdl.showCursor(false)
-	
+
 	gl.load()
 	gl.glViewport(0, 0, config.winWidth, config.winHeight)
 	gl.glShadeModel(gl.GL_FLAT)
@@ -32,6 +32,7 @@ function init()
 	gl.glEnable(gl.GL_DEPTH_TEST)
 // 	gl.glEnable(gl.GL_TEXTURE_2D)
 	gl.glEnable(gl.GL_BLEND)
+	gl.glEnable(gl.GL_NORMALIZE)
 	gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 	gl.glEnable(gl.GL_LIGHTING)
 	gl.glMatrixMode(gl.GL_PROJECTION)
