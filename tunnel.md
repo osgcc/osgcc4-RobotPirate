@@ -615,7 +615,6 @@ function gameOverMan()
 	gl.glColor3f(1, 1, 1)
 }
 
-
 function resetState()
 {
 	gameOver = false
@@ -643,7 +642,7 @@ function resetState()
 
 	emptyList(mines)
 	emptyList(playerBullets)
-	emptyList(enemyBullets)
+	emptyList(enemies)
 	emptyList(enemyBullets)
 	emptyList(items)
 }
@@ -988,9 +987,9 @@ function updateLevel()
 			{
 				levelMode = math.rand(2)
 
-				if(levelMode > 0)
-					levelMode++
-					
+				if(levelMode == MODE_MINEFIELD)
+					levelMode = MODE_DOGFIGHT
+
 				nextLevelChange = levelZ + levelChangeLength
 			}
 			break
@@ -1022,7 +1021,13 @@ function updateLevel()
 					emptyList(mines)
 					emptyList(enemies)
 					levelMode = MODE_NORMAL
+					playerWeaponLevel = 0
+					playerWeapon = weaponDescs[0]
 					healPlayer(playerMaxHealth)
+					playerAng = 0
+					dPlayerAng = 0
+					camAng = 0
+					playerAngLag.fill(0)
 				}
 			}
 			break
@@ -1320,6 +1325,23 @@ function draw2D()
 	text.drawText(10, config.winHeight - 10, "LIVES:{}", playerLives)
 	text.drawRightText(config.winWidth - 10, config.winHeight - 10, "{}", playerScore)
 
+	text.drawText(34, config.winHeight - 130, "GUN1")
+
+	if(playerWeaponLevel > 0)
+	{
+		text.drawText(34, config.winHeight - 100, "GUN2")
+
+		if(playerWeaponLevel > 1)
+		{
+			text.drawText(34, config.winHeight - 70, "GUN3")
+
+			if(playerWeaponLevel > 2)
+				text.drawText(34, config.winHeight - 40, "RAIL")
+		}
+	}
+
+	text.drawText(10, config.winHeight - 130 + (30 * playerWeapon.level), ">")
+
 	drawHealthBar()
 }
 
@@ -1383,7 +1405,7 @@ function maybeSpawnItem(ang: float, z: float)
 {
 	local r = math.frand(1.0)
 
-	if(r < 0.75)
+	if(r < 0.60)
 		return
 
 	r = math.frand(1.0)

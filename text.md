@@ -68,7 +68,7 @@ local function line(x, y)
 
 draw = function draw(c: char)
 {
-	if(!(c.isLower() || c.isUpper() || c.isDigit() || c == ':' || c == '!' || c == '.'))
+	if(!(c.isLower() || c.isUpper() || c.isDigit() || c == ':' || c == '!' || c == '.' || c == '>'))
 		c = ' '
 
 	switch(c)
@@ -386,6 +386,12 @@ draw = function draw(c: char)
 			line(8, -8)
 			move(8, -3)
 			line(8, 0)
+			break
+			
+		case '>':
+			move(0, -20)
+			line(16, -10)
+			line(0, 0)
 			break
 
 		case ' ': break
