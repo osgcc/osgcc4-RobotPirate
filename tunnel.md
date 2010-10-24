@@ -12,8 +12,38 @@ local ToDeg = 180 / math.pi
 import config
 
 /*
-- enemies
-- DERP
+As level progresses:
+	- Randomly spawn mines
+		- In patterns?
+	- Randomly spawn enemies
+	- Mine-dodging and dogfighting sections (where you do one to the exclusion of the other)
+	- Spawn boss every some amount of distance.. and let the player kill them before resuming normal play
+		- Increments difficulty level
+
+Enemies drop items randomly
+	- Health
+	- Extra lives (rare)
+	- Weapon upgrades
+	- Shield?
+
+Enemy types:
+	- Derp. Moves slightly slower than the level itself, shoots ahead every once in a while, eventually moves off near horizon. Little health.
+	- Quick. Moves forward/back and around a little way ahead of the player. Shoots at player more often than derp, but not too quick. Eventually moves off near horizon. Medium health.
+	- Heavy. Not very mobile, but hovers ahead of player. Fires a lot (maybe spread shot). Must be killed. High health.
+	- Boss. Not too mobile, but must be hit in weak spots. Fires a lot. Must be killed. Very high health.
+
+Weapon types:
+	- Single shooter. Slow firing rate; small bullet fired straight ahead; doesn't do much damage.
+	- Double shooter. Slightly higher rate; two streams of the above.
+	- Three-way shooter. Highest firing rate; shoots in a small spread, and each bullet does more damage.
+	- Railgun. Boss killer. Very slow firing rate, shoots straight ahead, does a lot of damage.
+
+SCORING:
+	- Mine: 10 pts
+	- Derp: 30 pts
+	- Quick: 60 pts
+	- Heavy: 100 pts
+	- Boss: 1000 pts
 */
 
 function main()
@@ -133,8 +163,8 @@ local lagOldPtr = 0
 local camAng = 0.0
 
 local levelModel
-local levelSegments = 60
-local levelSegmentLen = 4
+local levelSegments = 30
+local levelSegmentLen = 8
 local levelSpeed = 1.1
 local levelOffs = 0.0
 local levelZ = 0.0
@@ -252,22 +282,10 @@ function setupGraphics()
 // Load resources
 function setupResources()
 {
-	levelModel = makeTunnelPiece(30)
+	levelModel = makeTunnelPiece(20)
 	shipModel = loadModel("models/ship.obj")
 	obstacleModel = loadModel("models/obstacle.obj")
 	bulletModel = loadModel("models/bullet.obj")
-
-	local obs = obstacles
-
-	for(i: 0 .. 180, 30)
-	{
-		for(j: 0 .. 360, 360/15)
-		{
-			obs.next = Obstacle.alloc(toFloat(j), -toFloat(i))
-			obs.next.prev = obs
-			obs = obs.next
-		}
-	}
 }
 
 // Set up event handlers
@@ -302,8 +320,8 @@ function doInput()
 	{
 		playerBulletDelayer = playerBulletDelay
 		insertIntoList(Bullet.alloc(shipAng, -30.0, 0.0), playerBullets)
-		insertIntoList(Bullet.alloc(shipAng, -30.0, 75.0), playerBullets)
-		insertIntoList(Bullet.alloc(shipAng, -30.0, -75.0), playerBullets)
+// 		insertIntoList(Bullet.alloc(shipAng, -30.0, 75.0), playerBullets)
+// 		insertIntoList(Bullet.alloc(shipAng, -30.0, -75.0), playerBullets)
 	}
 }
 
@@ -335,7 +353,7 @@ function updatePlayer()
 		// Check for collision with obstacles
 		for(local obs = obstacles.next; obs !is null; obs = obs.next)
 		{
-			if(abs(b.z - obs.z) < 1 && angDiff(b.ang, obs.ang) < 7)
+			if(abs(b.z - obs.z) < 2 && angDiff(b.ang, obs.ang) < 7)
 			{
 				removeFromList(obs)
 				obs.free()
@@ -364,6 +382,10 @@ function updateCamera()
 function updateLevel()
 {
 	levelZ += levelSpeed
+	
+	if(levelZ % 20 < 1)
+		insertIntoList(Obstacle.alloc(math.frand(360.0), -240.0), obstacles)
+
 	levelOffs += levelSpeed
 
 	if(levelOffs > levelSegmentLen)
@@ -387,7 +409,11 @@ function updateLevel()
 		}
 
 		if(o.z > 0)
-			o.z = -180
+		{
+			removeFromList(o)
+			o.free()
+			continue
+		}
 	}
 }
 
@@ -395,55 +421,69 @@ function updateLevel()
 function drawGraphics()
 {
 	gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
-		gl.glMatrixMode(gl.GL_PROJECTION)
-		gl.glLoadMatrixf(projMat3D)
-		gl.glMatrixMode(gl.GL_MODELVIEW)
-		gl.glEnable(gl.GL_LIGHTING)
-
-
-		gl.glLoadIdentity()
-		gl.glRotatef(-camAng, 0, 0, 1)
-
-		drawLevel()
-		drawObstacles()
-		drawPlayerBullets()
-		drawPlayer()
-
-		gl.glMatrixMode(gl.GL_PROJECTION)
-		gl.glLoadMatrixf(projMat2D)
-		gl.glMatrixMode(gl.GL_MODELVIEW)
-		gl.glDisable(gl.GL_LIGHTING)
-		gl.glLoadIdentity()
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-		text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
-
-		gl.glPushMatrix()
-			gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
-			gl.glBegin(gl.GL_LINE_STRIP)
-				gl.glVertex2f(-80, 10)
-				gl.glVertex2f(80, 10)
-				gl.glVertex2f(80, -10)
-				gl.glVertex2f(-80, -10)
-				gl.glVertex2f(-80, 10)
-			gl.glEnd()
-
-			local temp = playerHealth / 100.0
-			gl.glColor3f(1 - temp, temp, 0)
-			gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
-
-			gl.glScalef(temp, 1, 1)
-			gl.glBegin(gl.GL_QUADS)
-				gl.glVertex2f(-78, 8)
-				gl.glVertex2f(78, 8)
-				gl.glVertex2f(78, -8)
-				gl.glVertex2f(-78, -8)
-			gl.glEnd()
-
-			gl.glColor3f(1, 1, 1)
-			gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
-
-		gl.glPopMatrix()
+		draw3D()
+		draw2D()
 	sdl.gl.swapBuffers()
+}
+
+function draw3D()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat3D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glEnable(gl.GL_LIGHTING)
+
+	gl.glLoadIdentity()
+	gl.glRotatef(-camAng, 0, 0, 1)
+
+	drawLevel()
+	drawObstacles()
+	drawPlayerBullets()
+	drawPlayer()
+}
+
+function draw2D()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat2D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glDisable(gl.GL_LIGHTING)
+	gl.glLoadIdentity()
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	text.drawText(0, 20, "FPS:{} MEM:{}", toInt(fps), gc.allocated())
+	text.drawText(0, 45, "ANG:{}", shipAng)
+
+	drawHealthBar()
+}
+
+function drawHealthBar()
+{
+	gl.glPushMatrix()
+		gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
+		gl.glBegin(gl.GL_LINE_STRIP)
+			gl.glVertex2f(-80, 10)
+			gl.glVertex2f(80, 10)
+			gl.glVertex2f(80, -10)
+			gl.glVertex2f(-80, -10)
+			gl.glVertex2f(-80, 10)
+		gl.glEnd()
+
+		local temp = playerHealth / 100.0
+		gl.glColor3f(1 - temp, temp, 0)
+		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL);
+
+		gl.glScalef(temp, 1, 1)
+		gl.glBegin(gl.GL_QUADS)
+			gl.glVertex2f(-80, 10)
+			gl.glVertex2f(80, 10)
+			gl.glVertex2f(80, -10)
+			gl.glVertex2f(-80, -10)
+		gl.glEnd()
+
+		gl.glColor3f(1, 1, 1)
+		gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
+
+	gl.glPopMatrix()
 }
 
 function drawLevel()
