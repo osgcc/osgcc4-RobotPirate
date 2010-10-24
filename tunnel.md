@@ -11,19 +11,6 @@ local ToDeg = 180 / math.pi
 
 import config
 
-/*
-As level progresses:
-	- Randomly spawn mines
-		- In patterns?
-	- Randomly spawn enemies
-	- Mine-dodging and dogfighting sections (where you do one to the exclusion of the other)
-	- Spawn boss every some amount of distance.. and let the player kill them before resuming normal play
-		- Increments difficulty level
-
-Enemies drop items randomly
-	- Shield?
-*/
-
 function main()
 {
 	setup()
@@ -216,6 +203,9 @@ local nextLevelChange
 local levelChangeLength = 600
 local normalMineFreq = 75
 local normalEnemyFreq = 100
+local dogfightEnemyFreq = 60
+local enemyKillCount = 0
+local dogfightKillLimit = 15
 local minefieldMineFreq = 7
 local MODE_NORMAL = 0
 local MODE_MINEFIELD = 1
@@ -390,7 +380,7 @@ local enemyDescs =
 	{
 		name = "heavy"
 		weapon = 2
-		fireRate = 60
+		fireRate = 80
 		health = 10
 		model = 0
 		score = Scores.HEAVY
@@ -926,6 +916,7 @@ function damageEnemy(enemy, amt)
 
 	if(enemy.health <= 0)
 	{
+		enemyKillCount++
 		playerScore += enemy.desc.score
 		maybeSpawnItem(enemy.ang, enemy.z)
 		removeFromList(enemy)
@@ -975,6 +966,10 @@ function updateLevel()
 			if(levelZ >= nextLevelChange)
 			{
 				levelMode = math.rand(3)
+
+				if(levelMode == MODE_DOGFIGHT)
+					enemyKillCount = 0
+
 				nextLevelChange = levelZ + levelChangeLength
 			}
 			break
@@ -982,7 +977,7 @@ function updateLevel()
 		case MODE_MINEFIELD:
 			if(levelZ % minefieldMineFreq < 1)
 				insertIntoList(Mine.alloc(math.frand(360.0), -240.0), mines)
-			
+
 			if(levelZ >= nextLevelChange)
 			{
 				levelMode = math.rand(2)
@@ -990,14 +985,34 @@ function updateLevel()
 				if(levelMode == MODE_MINEFIELD)
 					levelMode = MODE_DOGFIGHT
 
+				if(levelMode == MODE_DOGFIGHT)
+					enemyKillCount = 0
+
 				nextLevelChange = levelZ + levelChangeLength
 			}
 			break
 
 		case MODE_DOGFIGHT:
-			// TODO: this
-			levelMode = MODE_NORMAL
-			nextLevelChange = levelZ
+			if(levelZ % dogfightEnemyFreq < 1)
+			{
+				local r = math.frand(1.0)
+				local type
+
+				if(r < 0.5)
+					type = 0
+				else if(r < 0.85)
+					type = 1
+				else
+					type = 2
+
+				insertIntoList(Enemy.alloc(math.frand(360.0), -120.0, enemyDescs[type]), enemies)
+			}
+
+			if(enemyKillCount >= dogfightKillLimit)
+			{
+				levelMode = math.rand(2)
+				nextLevelChange = levelZ + levelChangeLength
+			}
 			break
 
 		case MODE_BOSS:
