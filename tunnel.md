@@ -21,28 +21,20 @@ As level progresses:
 		- Increments difficulty level
 
 Enemies drop items randomly
-	- Health
-	- Extra lives (rare)
-	- Weapon upgrades
 	- Shield?
-
-SCORING:
-	- Mine: 10 pts
-	- Derp: 30 pts
-	- Quick: 60 pts
-	- Heavy: 100 pts
-	- Boss: 1000 pts
-	- Collect item: 50 pts
 */
 
 function main()
 {
 	setup()
-
 	scope(exit)
 		sdl.quit()
 
-	loop()
+	while(mainScreenTurnOn())
+	{
+		intro()
+		loop()
+	}
 }
 
 function FreeList(T: class)
@@ -188,6 +180,7 @@ local projMat3D = Vector(gl.GLfloat, 16)
 local fps = 0
 local drawDebugText = false
 
+local gameOver = false
 local quitting = false
 local keys = array.new(512, false)
 local keysHit = array.new(512, false)
@@ -205,6 +198,7 @@ local playerWeapon
 local playerScore
 local playerLives
 local playerFiringRailgun
+local playerDeathCounter
 
 local playerAngLag = array.new(9, 0)
 local lagNewPtr
@@ -227,6 +221,7 @@ local MODE_NORMAL = 0
 local MODE_MINEFIELD = 1
 local MODE_DOGFIGHT = 2
 local MODE_BOSS = 3
+local MODE_DEAD = 4
 
 local mineDamageAmount = 5
 local mines = Mine() // dummy sentry node
@@ -475,8 +470,158 @@ local itemDescs =
 // Code
 // ===================================================================================
 
+function mainScreenTurnOn()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat2D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glDisable(gl.GL_LIGHTING)
+
+	resetState()
+
+	local ret
+
+	while(true)
+	{
+		event.poll()
+
+		if(keys[key.escape])
+		{
+			ret = false
+			break
+		}
+
+		if(keysHit[key.space])
+		{
+			ret = true
+			break
+		}
+
+		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+			gl.glLoadIdentity()
+
+			gl.glColor3f(1, 1, 0)
+
+			gl.glPushMatrix()
+				gl.glScalef(4, 4, 1)
+				text.drawCenterText(config.winCenterX / 4, 30, "ROBOT")
+				text.drawCenterText(config.winCenterX / 4, 60, "PIRATE")
+			gl.glPopMatrix()
+
+			gl.glColor3f(1, 1, 1)
+			text.drawCenterText(config.winCenterX, 300, "A GAME FOR THE 4TH ANNUAL OSGCC")
+			text.drawCenterText(config.winCenterX, 325, "BY JARRETT BILLINGSLEY")
+			text.drawCenterText(config.winCenterX, 400, "PRESS SPACE TO PLAY")
+			text.drawCenterText(config.winCenterX, 425, "OR ESCAPE TO QUIT")
+		sdl.gl.swapBuffers()
+	}
+
+	gl.glColor3f(1, 1, 1)
+	return ret
+}
+
+function intro()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat2D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glDisable(gl.GL_LIGHTING)
+
+	resetState()
+
+	while(true)
+	{
+		event.poll()
+
+		if(keysHit[key.space])
+			break
+
+		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+			gl.glLoadIdentity()
+
+			gl.glColor3f(1, 1, 0)
+			text.drawCenterText(config.winCenterX, 45, "YOU ARE ROBOT PIRATE")
+			gl.glColor3f(1, 1, 1)
+			text.drawText(5, 95 , "THE YEAR IS 20XX. EARTH HAS BEEN")
+			text.drawText(5, 120, "OPENED TO INTERGALACTIC TRADE.")
+			text.drawText(5, 145, "BUT SECURITY IS LOOSE AND PIRATES")
+			text.drawText(5, 170, "ARE A COMMON SIGHT.")
+			text.drawText(5, 220, "YOU ARE A SYNTHETIC BEING CREATED")
+			text.drawText(5, 245, "BY A CRIME SYNDICATE. HOWEVER YOU")
+			text.drawText(5, 270, "HAVE BECOME TRAPPED DEEP INSIDE A")
+			text.drawText(5, 295, "LARGE SPACE STATION WHILE ON A")
+			text.drawText(5, 320, "MISSION. NOW YOU MUST FIGHT YOUR")
+			text.drawText(5, 345, "WAY OUT AGAINST THE OTHER ROBOTIC")
+			text.drawText(5, 370, "GUARDS. GOOD LUCK!")
+			gl.glColor3f(1, 1, 0)
+			text.drawCenterText(config.winCenterX, 420, "CONTROLS")
+			gl.glColor3f(1, 1, 1)
+			text.drawText(5, 470, "LEFT AND RIGHT MOVE. SPACE FIRES.")
+			text.drawText(5, 495, "ZXCV SWITCH WEAPONS. ESC EXITS.")
+			text.drawText(5, 545, "PRESS SPACE TO START!")
+		sdl.gl.swapBuffers()
+	}
+
+	gl.glColor3f(1, 1, 1)
+}
+
+function gameOverMan()
+{
+	gl.glMatrixMode(gl.GL_PROJECTION)
+	gl.glLoadMatrixf(projMat2D)
+	gl.glMatrixMode(gl.GL_MODELVIEW)
+	gl.glDisable(gl.GL_LIGHTING)
+
+	resetState()
+
+	while(true)
+	{
+		event.poll()
+
+		if(keysHit[key.space] || keysHit[key.escape])
+			break
+
+		gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+
+			gl.glLoadIdentity()
+
+			gl.glColor3f(1, 0, 0)
+
+			gl.glPushMatrix()
+				gl.glScalef(4, 4, 1)
+				text.drawCenterText(config.winCenterX / 4, 25, "GAME")
+				text.drawCenterText(config.winCenterX / 4, 50, "OVER")
+			gl.glPopMatrix()
+
+			gl.glColor3f(1, 1, 1)
+
+			text.drawText(5, 250, "              XXXXX           ")
+			text.drawText(5, 275, "            XX     XX         ")
+			text.drawText(5, 300, "     XXX   X         X   XXX  ")
+			text.drawText(5, 325, "    XXXX   X XX   XX X   XXXX ")
+			text.drawText(5, 350, "      XXX X  XX   XX  X XXX   ")
+			text.drawText(5, 375, "        XX X   X X   X XX     ")
+			text.drawText(5, 400, "         X  X       X  X      ")
+			text.drawText(5, 425, "            X X X X X         ")
+			text.drawText(5, 450, "             X X X X          ")
+			text.drawText(5, 475, "              XXXXX           ")
+			text.drawText(5, 500, "            X       X         ")
+			text.drawText(5, 525, "          XXXX     XXXX       ")
+			text.drawText(5, 550, "         XXXX       XXXX      ")
+			text.drawText(5, 575, "          XX         XX       ")
+		sdl.gl.swapBuffers()
+	}
+
+	gl.glColor3f(1, 1, 1)
+}
+
+
 function resetState()
 {
+	gameOver = false
+	quitting = false
+	keys.fill(false)
+	keysHit.fill(false)
 	playerAng = 0.0
 	dPlayerAng = 0
 	playerHealth = playerMaxHealth
@@ -495,7 +640,7 @@ function resetState()
 	levelZ = 0.0
 	levelMode = MODE_NORMAL
 	nextLevelChange = 0
-	
+
 	emptyList(mines)
 	emptyList(playerBullets)
 	emptyList(enemyBullets)
@@ -515,13 +660,18 @@ function setup()
 // Main game loop.
 function loop()
 {
+	resetState()
 	local t = time.microTime()
 	local frames = 0
 
-	while(!quitting)
+	while(!gameOver && !quitting)
 	{
-		doInput()
-		updatePlayer()
+		if(levelMode != MODE_DEAD)
+		{
+			doInput()
+			updatePlayer()
+		}
+
 		updateCamera()
 		updateLevel()
 		updateEnemies()
@@ -538,6 +688,9 @@ function loop()
 			frames = 0
 		}
 	}
+	
+	if(gameOver)
+		gameOverMan()
 }
 
 // Set up the window and graphics mode
@@ -759,7 +912,7 @@ function updatePlayer()
 		for(local enemy = enemies; enemy && enemy.next !is null; enemy = enemy.next)
 		{
 			local e = enemy.next
-			
+
 			if(e.z < -30 && angDiff(playerAng, e.ang) < 7)
 				damageEnemy(e, weaponDescs[3].damage)
 		}
@@ -852,6 +1005,27 @@ function updateLevel()
 			// TODO: this
 			assert(false)
 			break
+			
+		case MODE_DEAD:
+			playerDeathCounter--
+
+			if(playerDeathCounter <= 0)
+			{
+				if(playerLives == 0)
+				{
+					gameOver = true
+				}
+				else
+				{
+					emptyList(playerBullets)
+					emptyList(enemyBullets)
+					emptyList(mines)
+					emptyList(enemies)
+					levelMode = MODE_NORMAL
+					healPlayer(playerMaxHealth)
+				}
+			}
+			break
 	}
 
 	levelOffs += levelSpeed
@@ -869,7 +1043,6 @@ function updateLevel()
 		
 		if(abs(m.z + 30) < 2 && angDiff(m.ang, playerAng) < 15)
 		{
-			// TODO: show effect
 			damagePlayer(mineDamageAmount, true)
 			removeFromList(m)
 			m.free()
@@ -890,7 +1063,7 @@ function updateEnemies()
 	for(local en = enemies; en && en.next; en = en.next)
 	{
 		local e = en.next
-		
+
 		e.update()
 		
 		if(e.z > 0)
@@ -987,7 +1160,10 @@ function draw3D()
 
 	drawLevel()
 	drawMines()
-	drawPlayer()
+	
+	if(levelMode != MODE_DEAD)
+		drawPlayer()
+		
 	drawPlayerBullets()
 	drawEnemies()
 	drawEnemyBullets()
@@ -1150,7 +1326,7 @@ function draw2D()
 function drawHealthBar()
 {
 	gl.glPushMatrix()
-		gl.glTranslatef(config.winWidth / 2, config.winHeight - 30, 0)
+		gl.glTranslatef(config.winCenterX, config.winHeight - 30, 0)
 		gl.glBegin(gl.GL_LINE_STRIP)
 			gl.glVertex2f(-80, 10)
 			gl.glVertex2f(80, 10)
@@ -1179,10 +1355,20 @@ function drawHealthBar()
 
 function damagePlayer(amt: int, explosive: bool = false)
 {
+	if(levelMode == MODE_DEAD)
+		return
+
 	playerHealth = clamp(playerHealth - amt, 0, playerMaxHealth)
 	local temp = playerHealth / (playerMaxHealth / 10.0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10 - temp, temp, 0, 1))
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_AMBIENT, float4(10 - temp, temp, 0, 1))
+
+	if(playerHealth == 0)
+	{
+		levelMode = MODE_DEAD
+		playerLives--
+		playerDeathCounter = 180
+	}
 }
 
 function healPlayer(amt: int)
@@ -1366,27 +1552,6 @@ function wrapAngle(v)
 	
 	return v
 }
-
-/* // Smoothly moves an angle from src to dest.
-function curveAngle(src, dest, speed)
-{
-	speed = toFloat(speed)
-
-	if(dest > src)
-	{
-		if((dest - src) > 180)
-			return (src - ((360 - (dest - src)) / speed));
-		else
-			return (src + ((dest - src) / speed));
-	}
-	else
-	{
-		if((src - dest) < 180)
-			return (src - ((src - dest) / speed));
-		else
-			return (src + ((360 - (src - dest)) / speed));
-	}
-} */
 
 // Calculates the normal of the plane described by the points p, q, and r.
 function calcNormal(p, q, r)
