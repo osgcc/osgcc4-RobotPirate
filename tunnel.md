@@ -4,12 +4,14 @@ import gl
 import sdl: event, key
 import math: sin, cos, abs
 
+import text
+
+local ToRad = math.pi / 180
+local ToDeg = 180 / math.pi
+
 import config
 
 /*
-- player/camera/movement
-- obstacles
-- bullets
 - enemies
 - DERP
 */
@@ -102,13 +104,16 @@ class Bullet
 	{
 		:ang = ang
 		:z = z
-		:dir = dir
+		:dir = dir * ToRad
 	}
 }
 
 // ===================================================================================
 // State
 // ===================================================================================
+
+local projMat2D = Vector(gl.GLfloat, 16)
+local projMat3D = Vector(gl.GLfloat, 16)
 
 local quitting = false
 local keys = array.new(512, false)
@@ -137,8 +142,9 @@ local obstacles = Obstacle() // dummy sentry node
 local obstacleAng = 0.0
 
 local playerBullets = Bullet() // dummy sentry node
-local playerBulletSpeed = 1
-local playerBulletDelay = 0
+local playerBulletSpeed = 2
+local playerBulletDelayer = 0
+local playerBulletDelay = 14
 
 // ===================================================================================
 // Code
@@ -197,21 +203,32 @@ function setupGraphics()
 	gl.glEnable(gl.GL_NORMALIZE)
 	gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 	gl.glEnable(gl.GL_LIGHTING)
+
 	gl.glMatrixMode(gl.GL_PROJECTION)
 	gl.glLoadIdentity()
 	gl.gluPerspective(45, toFloat(config.winWidth) / config.winHeight, 3, 1000)
+	gl.glGetFloatv(gl.GL_PROJECTION_MATRIX, projMat3D)
+
+	gl.glLoadIdentity()
+	gl.gluOrtho2D(0, config.winWidth, 0, config.winHeight);
+	gl.glScalef(1, -1, 1);
+	gl.glTranslatef(0.5, -config.winHeight + 0.5, 0);
+	gl.glGetFloatv(gl.GL_PROJECTION_MATRIX, projMat2D)
+
 	gl.glMatrixMode(gl.GL_MODELVIEW)
 	gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE);
-	gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, float4(0.1, 0.1, 0.1, 1))
+	gl.glLightModelfv(gl.GL_LIGHT_MODEL_AMBIENT, float4(0, 0, 0, 1))
 
 	gl.glEnable(gl.GL_LIGHT0)
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_SPOT_DIRECTION, float4(0, -1, 0, 0))
 // 	gl.glLightf(gl.GL_LIGHT0, gl.GL_LINEAR_ATTENUATION, 1);
-	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.05);
+	gl.glLightf(gl.GL_LIGHT0, gl.GL_QUADRATIC_ATTENUATION, 0.1);
 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
-// 	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(0, 1, 0, 1))
+	gl.glLightfv(gl.GL_LIGHT0, gl.GL_DIFFUSE, float4(10, 10, 10, 1))
 
 	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	
+	text.setup()
 }
 
 // Load resources
@@ -262,11 +279,12 @@ function doInput()
 			dShipAng += 1
 	}
 
-	if(playerBulletDelay == 0 && keys[key.space])
+	if(playerBulletDelayer == 0 && keys[key.space])
 	{
-		playerBulletDelay = 14
-		local b = Bullet.alloc(shipAng, -30.0, 0.0)
-		insertIntoList(b, playerBullets)
+		playerBulletDelayer = playerBulletDelay
+		insertIntoList(Bullet.alloc(shipAng, -30.0, 0.0), playerBullets)
+		insertIntoList(Bullet.alloc(shipAng, -30.0, 75.0), playerBullets)
+		insertIntoList(Bullet.alloc(shipAng, -30.0, -75.0), playerBullets)
 	}
 }
 
@@ -276,14 +294,17 @@ function updatePlayer()
 	dShipAng = clamp(dShipAng, -shipMoveSpeed, shipMoveSpeed)
 	shipAng = wrapAngle(shipAng + dShipAng * shipMoveMult)
 
-	if(playerBulletDelay > 0)
-		playerBulletDelay--
+	if(playerBulletDelayer > 0)
+		playerBulletDelayer--
 
 	for(local bul = playerBullets; bul && bul.next !is null; bul = bul.next)
 	{
 		local b = bul.next
+		
+		local dAng, dZ = sin(b.dir) * playerBulletSpeed, cos(b.dir) * playerBulletSpeed
 
-		b.z -= playerBulletSpeed
+		b.ang = wrapAngle(b.ang + dAng)
+		b.z -= dZ
 
 		if(b.z < -180)
 		{
@@ -331,12 +352,19 @@ function updateLevel()
 
 	obstacleAng = wrapAngle(obstacleAng + 5)
 
-	for(local obs = obstacles; obs.next !is null; obs = obs.next)
+	for(local obs = obstacles; obs && obs.next !is null; obs = obs.next)
 	{
 		local o = obs.next
 
 		o.z += levelSpeed
-		o.colliding = o.z > -32 && o.z < -28 && angDiff(o.ang, shipAng) < 15
+		
+		if(abs(o.z + 30) < 2 && angDiff(o.ang, shipAng) < 15)
+		{
+			// TODO: damage player, show effect..
+			removeFromList(o)
+			o.free()
+			continue
+		}
 
 		if(o.z > 0)
 			o.z = -180
@@ -347,59 +375,83 @@ function updateLevel()
 function drawGraphics()
 {
 	gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+		gl.glMatrixMode(gl.GL_PROJECTION)
+		gl.glLoadMatrixf(projMat3D)
+		gl.glMatrixMode(gl.GL_MODELVIEW)
+
 		gl.glLoadIdentity()
 		gl.glRotatef(-camAng, 0, 0, 1)
 
-		// Draw Level
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 1, 0, 1)
-		gl.glPushMatrix()
-			gl.glTranslatef(0, 0, levelOffs)
-			for(i: 0 .. levelSegments)
-			{
-				gl.glTranslatef(0, 0, -levelSegmentLen)
-				gl.glCallList(levelModel)
-			}
-		gl.glPopMatrix()
+		drawLevel()
+		drawObstacles()
+		drawPlayerBullets()
+		drawPlayer()
 
-		// Draw obstacles
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.5, 0, 0, 1)
-
-		for(local obs = obstacles.next; obs !is null; obs = obs.next)
-		{
-			gl.glPushMatrix()
-				gl.glRotatef(obs.ang, 0, 0, 1)
-				gl.glTranslatef(0, -9, obs.z)
-				gl.glRotatef(obstacleAng, 0, 1, 0)
-				gl.glCallList(obstacleModel)
-			gl.glPopMatrix()
-		}
-
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 0, 1, 1)
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 1, 1)
-
-		for(local bullet = playerBullets.next; bullet !is null; bullet = bullet.next)
-		{
-			gl.glPushMatrix()
-				gl.glRotatef(bullet.ang, 0, 0, 1)
-				gl.glTranslatef(0, -9, bullet.z)
-				gl.glCallList(obstacleModel)
-			gl.glPopMatrix()
-		}
-
-		// Draw player
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.3, 0.3, 0.3, 1)
-
-		gl.glPushMatrix()
-			gl.glRotatef(shipAng, 0, 0, 1)
-			gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -6, -26, 1))
-			gl.glTranslatef(0, -9, -30)
-			gl.glCallList(shipModel)
-		gl.glPopMatrix()
-
-		gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 0, 1)
+		gl.glMatrixMode(gl.GL_PROJECTION)
+		gl.glLoadMatrixf(projMat2D)
+		gl.glMatrixMode(gl.GL_MODELVIEW)
+		gl.glLoadIdentity()
+		text.drawText(0, 20, "hello")
 	sdl.gl.swapBuffers()
+}
+
+function drawLevel()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 1, 0, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0.05, 0, 1)
+
+	gl.glPushMatrix()
+		gl.glTranslatef(0, 0, levelOffs)
+		for(i: 0 .. levelSegments)
+		{
+			gl.glTranslatef(0, 0, -levelSegmentLen)
+			gl.glCallList(levelModel)
+		}
+	gl.glPopMatrix()
+}
+
+function drawObstacles()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 0, 0, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.5, 0, 0, 1)
+
+	for(local obs = obstacles.next; obs !is null; obs = obs.next)
+	{
+		gl.glPushMatrix()
+			gl.glRotatef(obs.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, obs.z)
+			gl.glRotatef(obstacleAng, 0, 1, 0)
+			gl.glCallList(obstacleModel)
+		gl.glPopMatrix()
+	}
+}
+
+function drawPlayerBullets()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(0, 0, 1, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0, 0, 1, 1)
+
+	for(local bullet = playerBullets.next; bullet !is null; bullet = bullet.next)
+	{
+		gl.glPushMatrix()
+			gl.glRotatef(bullet.ang, 0, 0, 1)
+			gl.glTranslatef(0, -9, bullet.z)
+			gl.glCallList(obstacleModel)
+		gl.glPopMatrix()
+	}	
+}
+
+function drawPlayer()
+{
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_AMBIENT_AND_DIFFUSE, float4(1, 1, 1, 1)
+	gl.glMaterialfv$ gl.GL_FRONT_AND_BACK, gl.GL_EMISSION, float4(0.8, 0.8, 0.8, 1)
+
+	gl.glPushMatrix()
+		gl.glRotatef(shipAng, 0, 0, 1)
+		gl.glLightfv(gl.GL_LIGHT0, gl.GL_POSITION, float4(0, -8, -23, 1))
+		gl.glTranslatef(0, -9, -30)
+		gl.glCallList(shipModel)
+	gl.glPopMatrix()
 }
 
 // ===================================================================================
